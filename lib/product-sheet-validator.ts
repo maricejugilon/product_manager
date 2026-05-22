@@ -234,7 +234,7 @@ type ValidateProductSheetRowsOptions = {
 };
 
 async function validateRows(rows: SheetProductRow[], categories: WooCategory[]) {
-  return mapWithConcurrency(rows, 5, async (row): Promise<ProductSheetValidationResult> => {
+  return mapWithConcurrency(rows, 1, async (row): Promise<ProductSheetValidationResult> => {
     try {
       const match = await matchWooProduct(row);
 

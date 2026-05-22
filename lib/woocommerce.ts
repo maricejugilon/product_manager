@@ -14,6 +14,27 @@ import type {
 
 type QueryValue = string | number | boolean | undefined | null;
 
+const requestDelayMs = Number(process.env.WOOCOMMERCE_REQUEST_DELAY_MS ?? (process.env.VERCEL ? 500 : 150));
+let nextRequestAt = 0;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForRequestSlot() {
+  if (requestDelayMs <= 0) {
+    return;
+  }
+
+  const now = Date.now();
+  const waitMs = Math.max(0, nextRequestAt - now);
+  nextRequestAt = Math.max(now, nextRequestAt) + requestDelayMs;
+
+  if (waitMs > 0) {
+    await sleep(waitMs);
+  }
+}
+
 function getConfig() {
   const storeUrl = process.env.WOOCOMMERCE_STORE_URL;
   const key = process.env.WOOCOMMERCE_CONSUMER_KEY;
@@ -51,26 +72,50 @@ async function wcFetch<T>(
   } = {}
 ): Promise<{ data: T; total?: number; totalPages?: number }> {
   const { auth } = getConfig();
-  const response = await fetch(buildUrl(path, options.query), {
-    method: options.method ?? "GET",
-    headers: {
-      Authorization: `Basic ${auth}`,
-      "Content-Type": "application/json"
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-    cache: "no-store"
-  });
+  const maxAttempts = options.method && options.method !== "GET" ? 3 : 5;
 
-  if (!response.ok) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    await waitForRequestSlot();
+
+    const response = await fetch(buildUrl(path, options.query), {
+      method: options.method ?? "GET",
+      headers: {
+        Authorization: `Basic ${auth}`,
+        "Content-Type": "application/json"
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      cache: "no-store"
+    });
+
+    if (response.ok) {
+      return {
+        data: (await response.json()) as T,
+        total: Number(response.headers.get("x-wp-total") ?? undefined) || undefined,
+        totalPages: Number(response.headers.get("x-wp-totalpages") ?? undefined) || undefined
+      };
+    }
+
     const body = await response.text();
+    const retryAfter = Number(response.headers.get("retry-after"));
+    const shouldRetry = response.status === 429 || response.status >= 500;
+
+    if (shouldRetry && attempt < maxAttempts) {
+      const backoffMs = Number.isFinite(retryAfter)
+        ? retryAfter * 1000
+        : Math.min(10000, 750 * 2 ** (attempt - 1));
+
+      await sleep(backoffMs);
+      continue;
+    }
+
+    if (response.status === 429) {
+      throw new Error("WooCommerce is rate limiting requests. Please wait a minute, then refresh the validator.");
+    }
+
     throw new Error(`WooCommerce ${response.status}: ${body || response.statusText}`);
   }
 
-  return {
-    data: (await response.json()) as T,
-    total: Number(response.headers.get("x-wp-total") ?? undefined) || undefined,
-    totalPages: Number(response.headers.get("x-wp-totalpages") ?? undefined) || undefined
-  };
+  throw new Error("WooCommerce request failed.");
 }
 
 export async function getProducts(params: {
@@ -147,20 +192,20 @@ export async function getCategories() {
     }
   });
   const totalPages = firstPage.totalPages ?? 1;
-  const remainingPages =
-    totalPages > 1
-      ? await Promise.all(
-          Array.from({ length: totalPages - 1 }, (_, index) =>
-            wcFetch<WooCategory[]>("/products/categories", {
-              query: {
-                ...query,
-                page: index + 2
-              }
-            })
-          )
-        )
-      : [];
-  const categories = [firstPage, ...remainingPages].flatMap((result) => result.data);
+  const pages = [firstPage];
+
+  for (let page = 2; page <= totalPages; page += 1) {
+    pages.push(
+      await wcFetch<WooCategory[]>("/products/categories", {
+        query: {
+          ...query,
+          page
+        }
+      })
+    );
+  }
+
+  const categories = pages.flatMap((result) => result.data);
 
   return [...new Map(categories.map((category) => [category.id, category])).values()];
 }
@@ -262,19 +307,18 @@ export async function getAllProducts(params: { category?: string; status?: strin
     page: 1
   });
   const totalPages = firstPage.totalPages ?? 1;
-  const remainingPages =
-    totalPages > 1
-      ? await Promise.all(
-          Array.from({ length: totalPages - 1 }, (_, index) =>
-            getProducts({
-              ...query,
-              page: index + 2
-            })
-          )
-        )
-      : [];
+  const pages = [firstPage];
 
-  const products = [firstPage, ...remainingPages].flatMap((result) => result.data);
+  for (let page = 2; page <= totalPages; page += 1) {
+    pages.push(
+      await getProducts({
+        ...query,
+        page
+      })
+    );
+  }
+
+  const products = pages.flatMap((result) => result.data);
 
   return [...new Map(products.map((product) => [product.id, product])).values()];
 }

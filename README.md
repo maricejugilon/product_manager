@@ -45,3 +45,7 @@ Because WooCommerce API keys can update store data, rotate the keys if they have
 ## Runtime Storage
 
 Local development stores review and validator cache JSON in `data/`. On Vercel, runtime JSON is written to `/tmp/fcw-product-manager` because the deployed app directory is read-only. That storage is ephemeral, so use a database or hosted key-value store if review history must persist across serverless cold starts.
+
+## WooCommerce Rate Limits
+
+WooCommerce requests are paced and retried on temporary 429/5xx responses. The product sheet validator intentionally syncs in small batches to avoid triggering store rate limits in production. You can tune the request gap with `WOOCOMMERCE_REQUEST_DELAY_MS`; the Vercel default is `500`.

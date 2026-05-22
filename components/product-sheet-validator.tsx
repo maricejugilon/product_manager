@@ -28,7 +28,7 @@ type ProductSheetValidatorResponse = {
   error?: string;
 };
 
-const syncBatchSize = 10;
+const syncBatchSize = 5;
 const cacheBatchSize = 5000;
 const pageSize = 10;
 
@@ -411,7 +411,10 @@ export default function ProductSheetValidator() {
 
       {error ? (
         <p className="error">
-          {error} The sheet must be accessible through Google Sheets CSV export for this validator.
+          {error}
+          {error.toLowerCase().includes("woocommerce")
+            ? ""
+            : " The sheet must be accessible through Google Sheets CSV export for this validator."}
         </p>
       ) : null}
       {message ? <p className="notice">{message}</p> : null}
