@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ClipboardCheck, CopyCheck, FileSpreadsheet, Layers3, PackageSearch, Trash2 } from "lucide-react";
+import { ClipboardCheck, CopyCheck, FileSpreadsheet, Layers3, LogOut, PackageSearch, Trash2 } from "lucide-react";
 
 import "./globals.css";
 
@@ -43,6 +43,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <ClipboardCheck size={17} />
               Review Queue
             </Link>
+            {process.env.APP_ADMIN_PASSWORD ? (
+              <a href="/api/logout">
+                <LogOut size={17} />
+                Logout
+              </a>
+            ) : null}
           </nav>
         </header>
         {children}

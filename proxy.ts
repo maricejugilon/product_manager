@@ -1,35 +1,41 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-export function proxy(request: NextRequest) {
-  const username = process.env.APP_ADMIN_USERNAME ?? "admin";
-  const password = process.env.APP_ADMIN_PASSWORD;
+import { adminPassword, adminSessionCookieName, isValidAdminSession, safeRedirectPath } from "@/lib/auth";
 
-  if (!password) {
+export async function proxy(request: NextRequest) {
+  const password = adminPassword();
+  const { pathname, search } = request.nextUrl;
+
+  if (!password || pathname === "/api/logout") {
     return NextResponse.next();
   }
 
-  const header = request.headers.get("authorization");
-  const [scheme, encoded] = header?.split(" ") ?? [];
+  const isLoginRoute = pathname === "/login" || pathname === "/api/login";
+  const isApiRoute = pathname.startsWith("/api/");
+  const hasSession = await isValidAdminSession(request.cookies.get(adminSessionCookieName)?.value);
 
-  if (scheme === "Basic" && encoded) {
-    const decoded = atob(encoded);
-    const separatorIndex = decoded.indexOf(":");
-    const providedUsername = separatorIndex >= 0 ? decoded.slice(0, separatorIndex) : "";
-    const providedPassword = separatorIndex >= 0 ? decoded.slice(separatorIndex + 1) : "";
-
-    if (providedUsername === username && providedPassword === password) {
-      return NextResponse.next();
+  if (hasSession) {
+    if (pathname === "/login") {
+      return NextResponse.redirect(new URL("/", request.url));
     }
+
+    return NextResponse.next();
   }
 
-  return new NextResponse("Authentication required", {
-    status: 401,
-    headers: {
-      "WWW-Authenticate": 'Basic realm="WooCommerce Product Manager"'
-    }
-  });
+  if (isLoginRoute) {
+    return NextResponse.next();
+  }
+
+  if (isApiRoute) {
+    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+  }
+
+  const loginUrl = new URL("/login", request.url);
+  loginUrl.searchParams.set("next", safeRedirectPath(`${pathname}${search}`));
+
+  return NextResponse.redirect(loginUrl);
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"]
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|robots.txt).*)"]
 };

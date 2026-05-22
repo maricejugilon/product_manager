@@ -36,6 +36,6 @@ the local system certificate store for Node to validate the HTTPS chain.
 
 ## Security
 
-Set `APP_ADMIN_USERNAME` and `APP_ADMIN_PASSWORD` in `.env.local` before deploying the app anywhere public. When `APP_ADMIN_PASSWORD` is set, the app uses HTTP Basic Auth and requires both values. `APP_ADMIN_USERNAME` defaults to `admin` when omitted.
+Set `APP_ADMIN_USERNAME` and `APP_ADMIN_PASSWORD` in `.env.local` before deploying the app anywhere public. When `APP_ADMIN_PASSWORD` is set, the app shows a login screen and requires both values. `APP_ADMIN_USERNAME` defaults to `admin` when omitted. You can also set `APP_AUTH_SECRET` to a long random value to make the session cookie independent from the admin password.
 
 Because WooCommerce API keys can update store data, rotate the keys if they have been shared outside your private workspace.
