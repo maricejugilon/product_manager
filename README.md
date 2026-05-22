@@ -31,8 +31,9 @@ npm.cmd run dev
 
 Then open the local URL printed by Next.js, usually `http://localhost:3000`.
 
-The scripts run Node with `--use-system-ca` because the FCW host currently needs
-the local system certificate store for Node to validate the HTTPS chain.
+The WooCommerce diagnostic script runs Node with `--use-system-ca` for local certificate validation.
+Do not set `NODE_OPTIONS=--use-system-ca` in Vercel; the build wrapper clears `NODE_OPTIONS`
+before running Next.js because Vercel workers do not allow that flag.
 
 ## Security
 
