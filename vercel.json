@@ -1,0 +1,3 @@
+{
+  "buildCommand": "env -u NODE_OPTIONS npm run build"
+}

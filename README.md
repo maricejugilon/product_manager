@@ -32,8 +32,9 @@ npm.cmd run dev
 Then open the local URL printed by Next.js, usually `http://localhost:3000`.
 
 The WooCommerce diagnostic script runs Node with `--use-system-ca` for local certificate validation.
-Do not set `NODE_OPTIONS=--use-system-ca` in Vercel; the build wrapper clears `NODE_OPTIONS`
-before running Next.js because Vercel workers do not allow that flag.
+Do not set `NODE_OPTIONS=--use-system-ca` in Vercel; Vercel workers do not allow that flag.
+The repository includes `vercel.json` and a build wrapper that remove `NODE_OPTIONS` before
+running Next.js, but the Vercel project setting should still be deleted if present.
 
 ## Security
 

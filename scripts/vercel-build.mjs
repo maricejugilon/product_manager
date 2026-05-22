@@ -3,6 +3,13 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const nextCli = require.resolve("next/dist/bin/next");
+
+if (process.env.NODE_OPTIONS) {
+  console.log("Clearing NODE_OPTIONS before Next.js build.");
+}
+
+delete process.env.NODE_OPTIONS;
+
 const env = { ...process.env };
 
 delete env.NODE_OPTIONS;
