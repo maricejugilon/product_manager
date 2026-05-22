@@ -1,0 +1,39 @@
+# dependencies
+node_modules
+
+# Next.js / Vercel build output
+.next
+out
+dist
+.vercel
+
+# environment variables
+.env
+.env.*
+!.env.example
+
+# local app data and review/cache state
+data/reviews.json
+data/product-sheet-validator-cache.json
+data/product-sheet-validator-cache-sync.json
+
+# AI agent / local workspace artifacts
+.codex
+.agents
+.runtime
+*.patch
+*.diff
+scripts/start-next.cmd
+scripts/start-dev-hidden.vbs
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dev-server.log
+dev-server.err
+*.log
+
+# TypeScript / tooling cache
+tsconfig.tsbuildinfo
