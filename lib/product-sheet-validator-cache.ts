@@ -3,6 +3,7 @@ import "server-only";
 import { copyFile, mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 
+import { runtimeStorageFile } from "@/lib/runtime-storage";
 import type { ProductSheetValidationResult } from "@/lib/product-sheet-validator";
 
 export type ProductSheetValidatorCache = {
@@ -12,8 +13,8 @@ export type ProductSheetValidatorCache = {
   results: ProductSheetValidationResult[];
 };
 
-const cacheFile = path.join(process.cwd(), "data", "product-sheet-validator-cache.json");
-const syncCacheFile = path.join(process.cwd(), "data", "product-sheet-validator-cache-sync.json");
+const cacheFile = runtimeStorageFile("product-sheet-validator-cache.json");
+const syncCacheFile = runtimeStorageFile("product-sheet-validator-cache-sync.json");
 
 async function ensureStore() {
   await mkdir(path.dirname(cacheFile), { recursive: true });

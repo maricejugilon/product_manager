@@ -4,9 +4,10 @@ import { randomUUID } from "crypto";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 
+import { runtimeStorageFile } from "@/lib/runtime-storage";
 import type { ReviewRecord } from "@/lib/types";
 
-const reviewFile = path.join(process.cwd(), "data", "reviews.json");
+const reviewFile = runtimeStorageFile("reviews.json");
 
 async function ensureStore() {
   await mkdir(path.dirname(reviewFile), { recursive: true });
