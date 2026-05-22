@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 export function proxy(request: NextRequest) {
+  const username = process.env.APP_ADMIN_USERNAME ?? "admin";
   const password = process.env.APP_ADMIN_PASSWORD;
 
   if (!password) {
@@ -11,8 +12,12 @@ export function proxy(request: NextRequest) {
   const [scheme, encoded] = header?.split(" ") ?? [];
 
   if (scheme === "Basic" && encoded) {
-    const [, providedPassword] = atob(encoded).split(":");
-    if (providedPassword === password) {
+    const decoded = atob(encoded);
+    const separatorIndex = decoded.indexOf(":");
+    const providedUsername = separatorIndex >= 0 ? decoded.slice(0, separatorIndex) : "";
+    const providedPassword = separatorIndex >= 0 ? decoded.slice(separatorIndex + 1) : "";
+
+    if (providedUsername === username && providedPassword === password) {
       return NextResponse.next();
     }
   }
