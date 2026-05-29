@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
 import { Layers3, Plus, Save } from "lucide-react";
 
 import type { CategoryChanges, WooCategory } from "@/lib/types";
@@ -11,7 +10,6 @@ function imageSrc(category?: WooCategory) {
 }
 
 export default function CategoryManager({ categories }: { categories: WooCategory[] }) {
-  const router = useRouter();
   const [selectedId, setSelectedId] = useState<number | "new">("new");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -60,8 +58,7 @@ export default function CategoryManager({ categories }: { categories: WooCategor
         throw new Error(await response.text());
       }
 
-      router.push("/reviews");
-      router.refresh();
+      window.location.assign("/reviews");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not create review draft.");
     } finally {

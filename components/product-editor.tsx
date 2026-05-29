@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronRight, ClipboardCheck, ExternalLink, Plus, Search, Save, X } from "lucide-react";
 
 import { getCategoryPath, getHierarchicalCategoryOptions } from "@/lib/category-utils";
@@ -1172,7 +1171,6 @@ export default function ProductEditor({
   product: WooProduct;
   categories: WooCategory[];
 }) {
-  const router = useRouter();
   const initialCategoryIds = useMemo(() => product.categories.map((item) => item.id), [product.categories]);
   const initialCrossSellIds = useMemo(() => product.cross_sell_ids ?? [], [product.cross_sell_ids]);
   const initialColourOptions = useMemo(() => initialColourBoardOptions(product), [product]);
@@ -1375,8 +1373,7 @@ export default function ProductEditor({
       }
 
       setMessage("Review draft created.");
-      router.push("/reviews");
-      router.refresh();
+      window.location.assign("/reviews");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not create review draft.");
     } finally {
