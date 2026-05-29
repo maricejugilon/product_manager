@@ -12,9 +12,31 @@ const reviewIndexKey = "fcw-product-manager:reviews:index";
 const reviewKeyPrefix = "fcw-product-manager:reviews:";
 const reviewLockPrefix = "fcw-product-manager:review-lock:";
 
+function envValue(...names: string[]) {
+  for (const name of names) {
+    const value = process.env[name];
+
+    if (value) {
+      return value;
+    }
+  }
+
+  const normalizedNames = names.map((name) => name.toUpperCase());
+
+  for (const [key, value] of Object.entries(process.env)) {
+    const normalizedKey = key.toUpperCase();
+
+    if (value && normalizedNames.some((name) => normalizedKey.endsWith(`_${name}`))) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
 function kvConfig() {
-  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+  const url = envValue("KV_REST_API_URL", "UPSTASH_REDIS_REST_URL");
+  const token = envValue("KV_REST_API_TOKEN", "UPSTASH_REDIS_REST_TOKEN");
 
   if (!url || !token) {
     return undefined;
