@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "node --use-system-ca node_modules/next/dist/bin/next dev",
     "build": "node scripts/vercel-build.mjs",
     "start": "next start",
     "check:woocommerce": "node --use-system-ca scripts/check-woocommerce.mjs",
