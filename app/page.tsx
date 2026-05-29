@@ -25,6 +25,28 @@ function pageSize(value: string | undefined) {
   return [25, 50, 100].includes(parsed) ? parsed : 100;
 }
 
+function customNotesFilter(value: string | undefined) {
+  return value === "yes" || value === "no" ? value : "";
+}
+
+function isTruthyMeta(value: unknown) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    return value === 1;
+  }
+
+  const normalized = String(value ?? "").trim().toLowerCase();
+
+  return normalized === "1" || normalized === "yes" || normalized === "true" || normalized === "on";
+}
+
+function productCustomNotes(product: { meta_data?: Array<{ key: string; value: unknown }> }) {
+  return isTruthyMeta(product.meta_data?.find((item) => item.key === "custom_notes")?.value);
+}
+
 function isActionableReview(review: ReviewRecord) {
   return review.status === "pending" || review.status === "failed";
 }
@@ -53,8 +75,9 @@ export default async function Dashboard({
   const search = first(params.search) ?? "";
   const category = first(params.category) ?? "";
   const stockStatus = first(params.stock_status) ?? "";
+  const customNotes = customNotesFilter(first(params.custom_notes));
   const [productResult, categories, reviews] = await Promise.all([
-    getProducts({ page, perPage, search, category, stockStatus }),
+    getProducts({ page, perPage, search, category, stockStatus, customNotes }),
     getCategories(),
     listReviews()
   ]);
@@ -76,6 +99,7 @@ export default async function Dashboard({
     stock_status: product.stock_status,
     manage_stock: product.manage_stock,
     stock_quantity: product.stock_quantity,
+    customNotes: productCustomNotes(product),
     categories: product.categories,
     image: product.images?.[0]?.src ?? "",
     reviewCount: productReviewCounts.get(product.id) ?? 0
@@ -130,6 +154,14 @@ export default async function Dashboard({
           </select>
         </div>
         <div className="field">
+          <label htmlFor="custom_notes">Custom notes</label>
+          <select id="custom_notes" name="custom_notes" defaultValue={customNotes}>
+            <option value="">Any custom notes</option>
+            <option value="yes">Custom notes: Yes</option>
+            <option value="no">Custom notes: No</option>
+          </select>
+        </div>
+        <div className="field">
           <label htmlFor="per_page">Page size</label>
           <select id="per_page" name="per_page" defaultValue={perPage}>
             <option value="25">25</option>
@@ -150,6 +182,7 @@ export default async function Dashboard({
         perPage={perPage}
         search={search}
         stockStatus={stockStatus}
+        customNotes={customNotes}
         totalItems={productResult.total ?? products.length}
         totalPages={productResult.totalPages ?? 1}
       />

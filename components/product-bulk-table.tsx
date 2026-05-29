@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Boxes, Edit3, FolderPlus, PackagePlus } from "lucide-react";
+import { Boxes, Edit3, FolderPlus, PackagePlus, StickyNote } from "lucide-react";
 
 import ProgressBar from "@/components/progress-bar";
 import { getHierarchicalCategoryOptions } from "@/lib/category-utils";
@@ -18,6 +18,7 @@ type ProductListItem = {
   stock_status: "instock" | "outofstock" | "onbackorder";
   manage_stock: boolean;
   stock_quantity: number | null;
+  customNotes: boolean;
   categories: WooProductCategory[];
   image: string;
   reviewCount: number;
@@ -30,6 +31,7 @@ type BulkStockResponse = {
 };
 
 type BulkCategoryResponse = BulkStockResponse;
+type BulkCustomNotesResponse = BulkStockResponse;
 
 export default function ProductBulkTable({
   products,
@@ -208,6 +210,72 @@ export default function ProductBulkTable({
     }
   }
 
+  async function onBulkCustomNotes(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage("");
+    setError("");
+
+    if (selectedIds.length === 0) {
+      setError("Select at least one product first.");
+      return;
+    }
+
+    const form = new FormData(event.currentTarget);
+    const customNotes = String(form.get("custom_notes") ?? "") === "yes";
+
+    setSubmitting(true);
+    const productIds = [...selectedIds];
+    setProgress({ current: 0, total: productIds.length, label: "Creating custom notes review drafts" });
+
+    try {
+      let created = 0;
+      let skipped = 0;
+      let failed = 0;
+
+      for (const [index, productId] of productIds.entries()) {
+        const response = await fetch("/api/reviews/bulk-custom-notes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            productIds: [productId],
+            customNotes
+          })
+        });
+        const text = await response.text();
+        const result = text ? (JSON.parse(text) as BulkCustomNotesResponse & { error?: string }) : undefined;
+
+        if (response.ok && result) {
+          created += result.created;
+          skipped += result.skipped;
+        } else {
+          failed += 1;
+        }
+
+        setProgress({
+          current: index + 1,
+          total: productIds.length,
+          label: "Creating custom notes review drafts"
+        });
+      }
+
+      if (failed === 0) {
+        setSelectedIds([]);
+      }
+
+      setMessage(
+        `Created ${created} custom notes review draft${created === 1 ? "" : "s"}${
+          skipped ? `, skipped ${skipped} unchanged product${skipped === 1 ? "" : "s"}` : ""
+        }${failed ? `, ${failed} failed` : ""}.`
+      );
+      router.refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not create bulk custom notes reviews.");
+    } finally {
+      setSubmitting(false);
+      setProgress(null);
+    }
+  }
+
   return (
     <>
       <form className="bulk-stock-bar" onSubmit={onBulkStock}>
@@ -281,6 +349,27 @@ export default function ProductBulkTable({
         </button>
       </form>
 
+      <form className="bulk-custom-notes-bar" onSubmit={onBulkCustomNotes}>
+        <div className="bulk-stock-title">
+          <StickyNote size={18} />
+          <div>
+            <strong>{selectedIds.length} selected</strong>
+            <span className="subtle">Create review drafts for the ACF custom notes toggle</span>
+          </div>
+        </div>
+        <div className="field">
+          <label htmlFor="bulk-custom-notes">Custom notes</label>
+          <select id="bulk-custom-notes" name="custom_notes" defaultValue="yes">
+            <option value="yes">Set to Yes</option>
+            <option value="no">Set to No</option>
+          </select>
+        </div>
+        <button className="button" type="submit" disabled={submitting || selectedIds.length === 0}>
+          <StickyNote size={17} />
+          {submitting ? "Creating" : "Create Custom Notes Reviews"}
+        </button>
+      </form>
+
       {message ? <p className="notice">{message}</p> : null}
       {error ? <p className="error">{error}</p> : null}
       {progress ? <ProgressBar {...progress} /> : null}
@@ -303,6 +392,7 @@ export default function ProductBulkTable({
               <th>Price</th>
               <th>Stock</th>
               <th>Categories</th>
+              <th>Custom notes</th>
               <th>Status</th>
               <th>Action</th>
             </tr>
@@ -344,6 +434,11 @@ export default function ProductBulkTable({
                   {product.categories?.map((item) => item.name).join(", ") || (
                     <span className="subtle">Uncategorized</span>
                   )}
+                </td>
+                <td>
+                  <span className={`status ${product.customNotes ? "approved" : "neutral"}`}>
+                    {product.customNotes ? "Yes" : "No"}
+                  </span>
                 </td>
                 <td>
                   <div className="status-stack">

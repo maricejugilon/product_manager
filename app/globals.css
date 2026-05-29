@@ -428,6 +428,19 @@ button {
   box-shadow: var(--shadow);
 }
 
+.bulk-custom-notes-bar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 230px) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 16px;
+  margin-bottom: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
 .bulk-stock-title {
   display: flex;
   align-items: center;
@@ -1959,6 +1972,7 @@ tr:last-child td {
   .toolbar,
   .bulk-stock-bar,
   .bulk-category-bar,
+  .bulk-custom-notes-bar,
   .pagination,
   .editor-shell,
   .relationship-grid,

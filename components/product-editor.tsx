@@ -219,6 +219,35 @@ function productMetaEntry(product: WooProduct, key: string, value: unknown) {
   };
 }
 
+function productMetaValue(product: WooProduct, key: string) {
+  return product.meta_data?.find((item) => item.key === key)?.value;
+}
+
+function isTruthyMeta(value: unknown) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    return value === 1;
+  }
+
+  const normalized = String(value ?? "").trim().toLowerCase();
+
+  return normalized === "1" || normalized === "yes" || normalized === "true" || normalized === "on";
+}
+
+function customNotesMetaData(product: WooProduct, enabled: boolean) {
+  const meta = [productMetaEntry(product, "custom_notes", enabled ? "1" : "0")];
+  const fieldKey = productMetaValue(product, "_custom_notes");
+
+  if (fieldKey) {
+    meta.push(productMetaEntry(product, "_custom_notes", fieldKey));
+  }
+
+  return meta;
+}
+
 const personalizationFieldKeys = {
   personalization: "field_68b4362b5c347",
   type: "field_68b436665c348",
@@ -1153,6 +1182,7 @@ export default function ProductEditor({
     () => specificationSignature(initialSpecificationGroups),
     [initialSpecificationGroups]
   );
+  const initialCustomNotes = useMemo(() => isTruthyMeta(productMetaValue(product, "custom_notes")), [product]);
   const categoryOptions = useMemo(() => getHierarchicalCategoryOptions(categories), [categories]);
   const categoryTree = useMemo(() => buildCategoryTree(categories), [categories]);
   const currentCategoryPaths = useMemo(
@@ -1270,6 +1300,11 @@ export default function ProductEditor({
     const featured = form.get("featured") === "on";
     if (featured !== product.featured) {
       changes.featured = featured;
+    }
+
+    const customNotes = form.get("custom_notes") === "on";
+    if (customNotes !== initialCustomNotes) {
+      changes.meta_data = mergeMetaData(changes.meta_data, customNotesMetaData(product, customNotes));
     }
 
     const stockQuantityRaw = String(form.get("stock_quantity") ?? "");
@@ -1412,6 +1447,10 @@ export default function ProductEditor({
             <label className="checkbox-field">
               <input name="featured" type="checkbox" defaultChecked={product.featured} />
               Featured product
+            </label>
+            <label className="checkbox-field">
+              <input name="custom_notes" type="checkbox" defaultChecked={initialCustomNotes} />
+              Custom notes
             </label>
             <div className="field wide">
               <label htmlFor="catalog_visibility">Catalog visibility</label>
@@ -1558,6 +1597,12 @@ export default function ProductEditor({
           <div>
             <span className="subtle">Current stock</span>
             <strong className={`status ${product.stock_status}`}>{product.stock_status}</strong>
+          </div>
+          <div>
+            <span className="subtle">Custom notes</span>
+            <strong className={`status ${initialCustomNotes ? "approved" : "neutral"}`}>
+              {initialCustomNotes ? "Yes" : "No"}
+            </strong>
           </div>
           <div>
             <span className="subtle">Current categories</span>

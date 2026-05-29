@@ -12,6 +12,7 @@ export async function GET(request: Request) {
       sku: url.searchParams.get("sku") ?? "",
       category: url.searchParams.get("category") ?? "",
       stockStatus: url.searchParams.get("stock_status") ?? "",
+      customNotes: url.searchParams.get("custom_notes") ?? "",
       status: url.searchParams.get("status") ?? "any",
       include: url.searchParams.get("include") ?? ""
     });

@@ -125,10 +125,14 @@ export async function getProducts(params: {
   sku?: string;
   category?: string;
   stockStatus?: string;
+  customNotes?: string;
   status?: string;
   fields?: string;
   include?: string;
 }) {
+  const customNotesValue =
+    params.customNotes === "yes" ? "1" : params.customNotes === "no" ? "0" : undefined;
+
   return wcFetch<WooProduct[]>("/products", {
     query: {
       per_page: params.perPage ?? 100,
@@ -139,6 +143,8 @@ export async function getProducts(params: {
       sku: params.sku,
       category: params.category,
       stock_status: params.stockStatus,
+      meta_key: customNotesValue ? "custom_notes" : undefined,
+      meta_value: customNotesValue,
       status: params.status || "any",
       _fields: params.fields,
       include: params.include
