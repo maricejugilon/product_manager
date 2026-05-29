@@ -14,7 +14,7 @@ Review-first Next.js admin app for managing WooCommerce product listings.
 - Lets you create and update product categories.
 - Detects duplicate category names and lets you compare parent/child category structure before creating a merge review.
 - Provides a dedicated Categories Cleanup page that lists empty categories, finds category slug mismatches, and creates review drafts to fix slugs, merge duplicates, or delete empty leaf categories.
-- Saves every edit as a pending review in `data/reviews.json`.
+- Saves every edit as a pending review. Local development uses `data/reviews.json`; production should use shared KV storage.
 - Publishes to WooCommerce only when a review is approved.
 - Supports approving individual reviews or approving all pending/failed reviews together.
 - Shows progress percentages while creating bulk stock review drafts or approving reviews in bulk.
@@ -44,7 +44,16 @@ Because WooCommerce API keys can update store data, rotate the keys if they have
 
 ## Runtime Storage
 
-Local development stores review and validator cache JSON in `data/`. On Vercel, runtime JSON is written to `/tmp/fcw-product-manager` because the deployed app directory is read-only. That storage is ephemeral, so use a database or hosted key-value store if review history must persist across serverless cold starts.
+Local development stores review and validator cache JSON in `data/`.
+
+Production review storage must be shared because Vercel functions can run in different instances or regions for different users. Configure Vercel KV or Upstash Redis REST with:
+
+```text
+KV_REST_API_URL
+KV_REST_API_TOKEN
+```
+
+The app also accepts `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`. Without shared review storage in Vercel, review creation and approval can land on different function instances, causing "Review not found" during approval. Approval requests use a short Redis lock so two users cannot publish the same review at the same time.
 
 ## WooCommerce Rate Limits
 

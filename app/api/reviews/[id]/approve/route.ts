@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { approveReview } from "@/lib/review-approval";
-import { getReview } from "@/lib/review-store";
+import { acquireReviewLock, getReview, releaseReviewLock } from "@/lib/review-store";
 
 export async function POST(
   _request: Request,
@@ -18,6 +18,30 @@ export async function POST(
     return NextResponse.json({ error: `Review is already ${review.status}.` }, { status: 400 });
   }
 
-  const updated = await approveReview(review);
-  return NextResponse.json(updated, { status: updated.status === "failed" ? 500 : 200 });
+  const lockToken = await acquireReviewLock(id);
+
+  if (!lockToken) {
+    return NextResponse.json({ error: "This review is already being approved." }, { status: 409 });
+  }
+
+  try {
+    const latestReview = await getReview(id);
+
+    if (!latestReview) {
+      return NextResponse.json({ error: "Review not found." }, { status: 404 });
+    }
+
+    if (latestReview.status === "approved" || latestReview.status === "rejected") {
+      return NextResponse.json({ error: `Review is already ${latestReview.status}.` }, { status: 400 });
+    }
+
+    const updated = await approveReview(latestReview);
+    return NextResponse.json(updated, { status: updated.status === "failed" ? 500 : 200 });
+  } finally {
+    try {
+      await releaseReviewLock(id, lockToken);
+    } catch {
+      // The lock has a short TTL, so a release failure should not hide the approval result.
+    }
+  }
 }
