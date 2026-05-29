@@ -1,5 +1,5 @@
 import ReviewQueue from "@/components/review-queue";
-import { listReviews } from "@/lib/review-store";
+import { isReviewStorageMissing, listReviews, reviewStorageSetupMessage } from "@/lib/review-store";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +16,7 @@ export default async function ReviewsPage() {
           </p>
         </div>
       </div>
+      {isReviewStorageMissing() ? <p className="error">{reviewStorageSetupMessage()}</p> : null}
       <ReviewQueue reviews={reviews} />
     </main>
   );

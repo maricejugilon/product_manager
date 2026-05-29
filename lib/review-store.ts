@@ -30,9 +30,17 @@ function shouldRequireSharedStore() {
   return Boolean(process.env.VERCEL);
 }
 
+export function isReviewStorageMissing() {
+  return shouldRequireSharedStore() && !kvConfig();
+}
+
+export function reviewStorageSetupMessage() {
+  return "Production review storage is not configured. Add Vercel KV or Upstash Redis env vars: KV_REST_API_URL and KV_REST_API_TOKEN.";
+}
+
 function sharedStoreError() {
   return new Error(
-    "Production review storage is not configured. Add Vercel KV or Upstash Redis env vars: KV_REST_API_URL and KV_REST_API_TOKEN."
+    reviewStorageSetupMessage()
   );
 }
 
@@ -106,8 +114,8 @@ export async function listReviews() {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
-  if (shouldRequireSharedStore()) {
-    throw sharedStoreError();
+  if (isReviewStorageMissing()) {
+    return [];
   }
 
   try {

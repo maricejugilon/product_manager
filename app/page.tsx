@@ -5,7 +5,7 @@ import PaginationControls from "@/components/pagination-controls";
 import ProductBulkTable from "@/components/product-bulk-table";
 import { getHierarchicalCategoryOptions } from "@/lib/category-utils";
 import { getCategories, getProductsByCustomNotes, productHasCustomNotes } from "@/lib/woocommerce";
-import { listReviews } from "@/lib/review-store";
+import { isReviewStorageMissing, listReviews, reviewStorageSetupMessage } from "@/lib/review-store";
 import type { ProductMergeChanges, ReviewRecord } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -111,6 +111,8 @@ export default async function Dashboard({
           </Link>
         </div>
       </div>
+
+      {isReviewStorageMissing() ? <p className="error">{reviewStorageSetupMessage()}</p> : null}
 
       <form className="toolbar">
         <div className="field">

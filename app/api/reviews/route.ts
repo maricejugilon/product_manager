@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { createReview, listReviews } from "@/lib/review-store";
+import { createReview, isReviewStorageMissing, listReviews } from "@/lib/review-store";
 import { compactCategoryChanges, compactProductChanges, hasMeaningfulChanges } from "@/lib/sanitize";
 import { getCategory, getProduct } from "@/lib/woocommerce";
 
@@ -10,6 +10,13 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    if (isReviewStorageMissing()) {
+      return NextResponse.json(
+        { error: "Review storage is not configured. Add KV_REST_API_URL and KV_REST_API_TOKEN in Vercel." },
+        { status: 503 }
+      );
+    }
+
     const body = await request.json();
     const resource = body.resource;
     const action = body.action;
