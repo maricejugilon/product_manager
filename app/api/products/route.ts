@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 
-import { getProducts } from "@/lib/woocommerce";
+import { getProductsByCustomNotes } from "@/lib/woocommerce";
 
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
-    const result = await getProducts({
+    const result = await getProductsByCustomNotes({
       page: Number(url.searchParams.get("page") ?? 1),
       perPage: Number(url.searchParams.get("per_page") ?? 100),
       search: url.searchParams.get("search") ?? "",

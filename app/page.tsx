@@ -3,7 +3,8 @@ import { Filter, PackageCheck } from "lucide-react";
 
 import PaginationControls from "@/components/pagination-controls";
 import ProductBulkTable from "@/components/product-bulk-table";
-import { getCategories, getProducts } from "@/lib/woocommerce";
+import { getHierarchicalCategoryOptions } from "@/lib/category-utils";
+import { getCategories, getProductsByCustomNotes, productHasCustomNotes } from "@/lib/woocommerce";
 import { listReviews } from "@/lib/review-store";
 import type { ProductMergeChanges, ReviewRecord } from "@/lib/types";
 
@@ -27,24 +28,6 @@ function pageSize(value: string | undefined) {
 
 function customNotesFilter(value: string | undefined) {
   return value === "yes" || value === "no" ? value : "";
-}
-
-function isTruthyMeta(value: unknown) {
-  if (typeof value === "boolean") {
-    return value;
-  }
-
-  if (typeof value === "number") {
-    return value === 1;
-  }
-
-  const normalized = String(value ?? "").trim().toLowerCase();
-
-  return normalized === "1" || normalized === "yes" || normalized === "true" || normalized === "on";
-}
-
-function productCustomNotes(product: { meta_data?: Array<{ key: string; value: unknown }> }) {
-  return isTruthyMeta(product.meta_data?.find((item) => item.key === "custom_notes")?.value);
 }
 
 function isActionableReview(review: ReviewRecord) {
@@ -77,12 +60,13 @@ export default async function Dashboard({
   const stockStatus = first(params.stock_status) ?? "";
   const customNotes = customNotesFilter(first(params.custom_notes));
   const [productResult, categories, reviews] = await Promise.all([
-    getProducts({ page, perPage, search, category, stockStatus, customNotes }),
+    getProductsByCustomNotes({ page, perPage, search, category, stockStatus, customNotes }),
     getCategories(),
     listReviews()
   ]);
   const pendingCount = reviews.filter((review) => review.status === "pending").length;
   const productReviewCounts = new Map<number, number>();
+  const categoryOptions = getHierarchicalCategoryOptions(categories);
 
   for (const review of reviews.filter(isActionableReview)) {
     for (const productId of productReviewIds(review)) {
@@ -99,7 +83,7 @@ export default async function Dashboard({
     stock_status: product.stock_status,
     manage_stock: product.manage_stock,
     stock_quantity: product.stock_quantity,
-    customNotes: productCustomNotes(product),
+    customNotes: productHasCustomNotes(product),
     categories: product.categories,
     image: product.images?.[0]?.src ?? "",
     reviewCount: productReviewCounts.get(product.id) ?? 0
@@ -137,9 +121,9 @@ export default async function Dashboard({
           <label htmlFor="category">Category</label>
           <select id="category" name="category" defaultValue={category}>
             <option value="">All categories</option>
-            {categories.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
+            {categoryOptions.map((option) => (
+              <option key={option.category.id} value={option.category.id}>
+                {option.path}
               </option>
             ))}
           </select>

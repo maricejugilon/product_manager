@@ -14,8 +14,22 @@ import type {
 
 type QueryValue = string | number | boolean | undefined | null;
 
+type GetProductsParams = {
+  page?: number;
+  perPage?: number;
+  search?: string;
+  sku?: string;
+  category?: string;
+  stockStatus?: string;
+  status?: string;
+  fields?: string;
+  include?: string;
+};
+
 const requestDelayMs = Number(process.env.WOOCOMMERCE_REQUEST_DELAY_MS ?? (process.env.VERCEL ? 500 : 150));
 let nextRequestAt = 0;
+const customNotesCacheTtlMs = 5 * 60 * 1000;
+const customNotesProductCache = new Map<string, { expiresAt: number; products: WooProduct[] }>();
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -118,21 +132,7 @@ async function wcFetch<T>(
   throw new Error("WooCommerce request failed.");
 }
 
-export async function getProducts(params: {
-  page?: number;
-  perPage?: number;
-  search?: string;
-  sku?: string;
-  category?: string;
-  stockStatus?: string;
-  customNotes?: string;
-  status?: string;
-  fields?: string;
-  include?: string;
-}) {
-  const customNotesValue =
-    params.customNotes === "yes" ? "1" : params.customNotes === "no" ? "0" : undefined;
-
+export async function getProducts(params: GetProductsParams) {
   return wcFetch<WooProduct[]>("/products", {
     query: {
       per_page: params.perPage ?? 100,
@@ -143,8 +143,6 @@ export async function getProducts(params: {
       sku: params.sku,
       category: params.category,
       stock_status: params.stockStatus,
-      meta_key: customNotesValue ? "custom_notes" : undefined,
-      meta_value: customNotesValue,
       status: params.status || "any",
       _fields: params.fields,
       include: params.include
@@ -157,11 +155,95 @@ export async function getProduct(id: number) {
   return data;
 }
 
+export function productHasCustomNotes(product: { meta_data?: Array<{ key: string; value: unknown }> }) {
+  const value = product.meta_data?.find((item) => item.key === "custom_notes")?.value;
+
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    return value === 1;
+  }
+
+  const normalized = String(value ?? "").trim().toLowerCase();
+
+  return normalized === "1" || normalized === "yes" || normalized === "true" || normalized === "on";
+}
+
+function customNotesCacheKey(params: GetProductsParams) {
+  return JSON.stringify({
+    search: params.search ?? "",
+    sku: params.sku ?? "",
+    category: params.category ?? "",
+    stockStatus: params.stockStatus ?? "",
+    status: params.status ?? "any",
+    fields: params.fields ?? "",
+    include: params.include ?? ""
+  });
+}
+
+async function getCustomNotesFilterProducts(params: GetProductsParams) {
+  const cacheKey = customNotesCacheKey(params);
+  const cached = customNotesProductCache.get(cacheKey);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.products;
+  }
+
+  const products: WooProduct[] = [];
+  let currentPage = 1;
+  let totalPages = 1;
+
+  do {
+    const result = await getProducts({
+      ...params,
+      page: currentPage,
+      perPage: 100
+    });
+
+    products.push(...result.data);
+    totalPages = result.totalPages ?? 1;
+    currentPage += 1;
+  } while (currentPage <= totalPages);
+
+  const uniqueProducts = [...new Map(products.map((product) => [product.id, product])).values()];
+
+  customNotesProductCache.set(cacheKey, {
+    expiresAt: Date.now() + customNotesCacheTtlMs,
+    products: uniqueProducts
+  });
+
+  return uniqueProducts;
+}
+
+export async function getProductsByCustomNotes(params: GetProductsParams & { customNotes?: string }) {
+  if (params.customNotes !== "yes" && params.customNotes !== "no") {
+    return getProducts(params);
+  }
+
+  const target = params.customNotes === "yes";
+  const page = params.page ?? 1;
+  const perPage = params.perPage ?? 100;
+  const products = await getCustomNotesFilterProducts(params);
+  const filtered = products.filter((product) => productHasCustomNotes(product) === target);
+  const start = (page - 1) * perPage;
+  const total = filtered.length;
+
+  return {
+    data: filtered.slice(start, start + perPage),
+    total,
+    totalPages: Math.max(1, Math.ceil(total / perPage))
+  };
+}
+
 export async function updateProduct(id: number, changes: ProductChanges) {
   const { data } = await wcFetch<WooProduct>(`/products/${id}`, {
     method: "PUT",
     body: changes
   });
+
+  customNotesProductCache.clear();
 
   return data;
 }
@@ -171,6 +253,8 @@ export async function createProduct(changes: ProductChanges) {
     method: "POST",
     body: changes
   });
+
+  customNotesProductCache.clear();
 
   return data;
 }
