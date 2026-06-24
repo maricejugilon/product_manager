@@ -32,7 +32,7 @@ const syncBatchSize = 5;
 const cacheBatchSize = 5000;
 const pageSize = 10;
 
-type ViewFilter = "all" | "needs_review" | "unmatched" | "for_review";
+type ViewFilter = "unmatched" | "category_issues" | "all" | "for_review";
 type LoadMode = "cache" | "sync" | "refresh";
 
 function statusClass(result: ProductSheetValidationResult) {
@@ -180,7 +180,7 @@ export default function ProductSheetValidator() {
   const [creatingRow, setCreatingRow] = useState<number | null>(null);
   const [reviewedRows, setReviewedRows] = useState<Set<number>>(() => new Set());
   const [currentPage, setCurrentPage] = useState(1);
-  const [viewFilter, setViewFilter] = useState<ViewFilter>("all");
+  const [viewFilter, setViewFilter] = useState<ViewFilter>("unmatched");
 
   async function loadRows(mode: LoadMode, signal: AbortSignal) {
     const sync = mode === "sync";
@@ -288,13 +288,21 @@ export default function ProductSheetValidator() {
     () => metric(results, (result) => result.status !== "matched" || !result.categoryComparison.matches),
     [results]
   );
+  const unmatchedCount = useMemo(
+    () => metric(results, (result) => result.status === "not_found" || result.status === "missing_lookup"),
+    [results]
+  );
+  const categoryIssueCount = useMemo(
+    () => metric(results, (result) => Boolean(result.product) && !result.categoryComparison.matches),
+    [results]
+  );
   const filteredResults = useMemo(() => {
-    if (viewFilter === "needs_review") {
-      return results.filter((result) => result.status !== "matched" || !result.categoryComparison.matches);
-    }
-
     if (viewFilter === "unmatched") {
       return results.filter((result) => result.status === "not_found" || result.status === "missing_lookup");
+    }
+
+    if (viewFilter === "category_issues") {
+      return results.filter((result) => Boolean(result.product) && !result.categoryComparison.matches);
     }
 
     if (viewFilter === "for_review") {
@@ -428,10 +436,10 @@ export default function ProductSheetValidator() {
           <div className="product-sheet-toolbar">
             <div className="product-sheet-tabs" aria-label="Product sheet filters">
               {[
-                ["all", "All"],
-                ["needs_review", "Needs review"],
-                ["unmatched", "No match"],
-                ["for_review", "For review"]
+                ["unmatched", `No match (${unmatchedCount})`],
+                ["category_issues", `Category issues (${categoryIssueCount})`],
+                ["all", `All (${results.length})`],
+                ["for_review", `For review (${reviewedRows.size})`]
               ].map(([value, label]) => (
                 <button
                   key={value}
