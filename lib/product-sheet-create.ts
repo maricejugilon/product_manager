@@ -218,7 +218,7 @@ function jsonLdImages(value: unknown, baseUrl: string) {
   return images.map((image) => absoluteUrl(String(image), baseUrl)).filter(Boolean);
 }
 
-async function scrapeLiveProduct(url: string): Promise<ScrapedProductData> {
+export async function scrapeLiveProduct(url: string): Promise<ScrapedProductData> {
   const response = await fetch(url, {
     cache: "no-store",
     headers: {
@@ -544,7 +544,7 @@ export function colourBoardPersonalizationMeta(options: ColourBoardOption[]) {
   return meta;
 }
 
-function parseFeatureSpecifications(descriptionHtml: string) {
+export function parseFeatureSpecifications(descriptionHtml: string) {
   if (!/Features/i.test(descriptionHtml)) {
     return [];
   }

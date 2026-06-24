@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 
 import { getProductsByCustomNotes } from "@/lib/woocommerce";
 
+export const maxDuration = 300;
+
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
@@ -13,6 +15,7 @@ export async function GET(request: Request) {
       category: url.searchParams.get("category") ?? "",
       stockStatus: url.searchParams.get("stock_status") ?? "",
       customNotes: url.searchParams.get("custom_notes") ?? "",
+      dimensions: url.searchParams.get("dimensions") ?? "",
       status: url.searchParams.get("status") ?? "any",
       include: url.searchParams.get("include") ?? ""
     });

@@ -1,7 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
-import { ChevronDown, ChevronRight, ClipboardCheck, ExternalLink, Plus, Search, Save, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  ClipboardCheck,
+  ExternalLink,
+  Plus,
+  Ruler,
+  Search,
+  Save,
+  X
+} from "lucide-react";
 
 import { getCategoryPath, getHierarchicalCategoryOptions } from "@/lib/category-utils";
 import { COLOUR_BOARD_CHOICES, type ColourBoardChoice } from "@/lib/colour-board-choices";
@@ -9,6 +19,31 @@ import type { ProductChanges, WooCategory, WooProduct } from "@/lib/types";
 
 function sortedIds(ids: number[]) {
   return [...ids].sort((a, b) => a - b).join(",");
+}
+
+function dimensionValue(form: FormData, field: "length" | "width" | "height") {
+  return String(form.get(`dimension_${field}`) ?? "").trim();
+}
+
+function isValidDimension(value: string) {
+  if (!value) {
+    return true;
+  }
+
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed) && parsed >= 0;
+}
+
+function dimensionsText(product: WooProduct) {
+  const dimensions = product.dimensions ?? {};
+  const values = [dimensions.length, dimensions.width, dimensions.height].map((value) => value?.trim() ?? "");
+
+  if (values.every((value) => !value)) {
+    return "Not set";
+  }
+
+  return values.map((value) => value || "-").join(" x ");
 }
 
 function imageText(product: WooProduct) {
@@ -20,7 +55,6 @@ function advancedText(product: WooProduct) {
     {
       attributes: product.attributes ?? [],
       meta_data: product.meta_data ?? [],
-      dimensions: product.dimensions ?? {},
       weight: product.weight ?? "",
       shipping_class: product.shipping_class ?? "",
       tags: product.tags?.map((tag) => ({ id: tag.id })) ?? [],
@@ -1316,6 +1350,32 @@ export default function ProductEditor({
       changes.stock_quantity = stockQuantity;
     }
 
+    const dimensions = {
+      length: dimensionValue(form, "length"),
+      width: dimensionValue(form, "width"),
+      height: dimensionValue(form, "height")
+    };
+
+    if (Object.values(dimensions).some((value) => !isValidDimension(value))) {
+      setError("Dimensions must be zero or a positive number.");
+      setSubmitting(false);
+      return;
+    }
+
+    const currentDimensions = {
+      length: product.dimensions?.length?.trim() ?? "",
+      width: product.dimensions?.width?.trim() ?? "",
+      height: product.dimensions?.height?.trim() ?? ""
+    };
+
+    if (
+      dimensions.length !== currentDimensions.length ||
+      dimensions.width !== currentDimensions.width ||
+      dimensions.height !== currentDimensions.height
+    ) {
+      changes.dimensions = dimensions;
+    }
+
     if (sortedIds(categoryIds) !== sortedIds(initialCategoryIds)) {
       changes.categories = categoryIds.map((id) => ({ id }));
     }
@@ -1458,6 +1518,48 @@ export default function ProductEditor({
                 <option value="hidden">Hidden</option>
               </select>
             </div>
+            <fieldset className="dimension-fields wide">
+              <legend>
+                <Ruler size={16} />
+                Shipping dimensions
+              </legend>
+              <div className="field">
+                <label htmlFor="dimension_length">Length</label>
+                <input
+                  id="dimension_length"
+                  name="dimension_length"
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="any"
+                  defaultValue={product.dimensions?.length ?? ""}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="dimension_width">Width</label>
+                <input
+                  id="dimension_width"
+                  name="dimension_width"
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="any"
+                  defaultValue={product.dimensions?.width ?? ""}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="dimension_height">Height</label>
+                <input
+                  id="dimension_height"
+                  name="dimension_height"
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="any"
+                  defaultValue={product.dimensions?.height ?? ""}
+                />
+              </div>
+            </fieldset>
             <div className="field wide">
               <div className="category-field-head">
                 <label>Categories</label>
@@ -1594,6 +1696,10 @@ export default function ProductEditor({
           <div>
             <span className="subtle">Current stock</span>
             <strong className={`status ${product.stock_status}`}>{product.stock_status}</strong>
+          </div>
+          <div>
+            <span className="subtle">Current dimensions (L x W x H)</span>
+            <strong>{dimensionsText(product)}</strong>
           </div>
           <div>
             <span className="subtle">Custom notes</span>

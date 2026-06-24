@@ -13,6 +13,7 @@ type PaginationControlsProps = {
   category: string;
   stockStatus: string;
   customNotes: string;
+  dimensions: string;
 };
 
 function pageWindow(currentPage: number, totalPages: number) {
@@ -35,7 +36,8 @@ export default function PaginationControls({
   search,
   category,
   stockStatus,
-  customNotes
+  customNotes,
+  dimensions
 }: PaginationControlsProps) {
   const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const safeTotalPages = Math.max(totalPages, 1);
@@ -61,6 +63,10 @@ export default function PaginationControls({
 
     if (customNotes) {
       params.set("custom_notes", customNotes);
+    }
+
+    if (dimensions) {
+      params.set("dimensions", dimensions);
     }
 
     params.set("per_page", String(perPage));

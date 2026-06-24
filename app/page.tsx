@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Filter, PackageCheck } from "lucide-react";
+import { Filter, PackageCheck, RotateCcw, Search } from "lucide-react";
 
 import PaginationControls from "@/components/pagination-controls";
 import ProductBulkTable from "@/components/product-bulk-table";
@@ -9,6 +9,7 @@ import { isReviewStorageMissing, listReviews, reviewStorageSetupMessage } from "
 import type { ProductMergeChanges, ReviewRecord } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -28,6 +29,10 @@ function pageSize(value: string | undefined) {
 
 function customNotesFilter(value: string | undefined) {
   return value === "yes" || value === "no" ? value : "";
+}
+
+function dimensionsFilter(value: string | undefined) {
+  return value === "missing" || value === "complete" ? value : "";
 }
 
 function isActionableReview(review: ReviewRecord) {
@@ -59,8 +64,9 @@ export default async function Dashboard({
   const category = first(params.category) ?? "";
   const stockStatus = first(params.stock_status) ?? "";
   const customNotes = customNotesFilter(first(params.custom_notes));
+  const dimensions = dimensionsFilter(first(params.dimensions));
   const [productResult, categories, reviews] = await Promise.all([
-    getProductsByCustomNotes({ page, perPage, search, category, stockStatus, customNotes }),
+    getProductsByCustomNotes({ page, perPage, search, category, stockStatus, customNotes, dimensions }),
     getCategories(),
     listReviews()
   ]);
@@ -86,8 +92,10 @@ export default async function Dashboard({
     customNotes: productHasCustomNotes(product),
     categories: product.categories,
     image: product.images?.[0]?.src ?? "",
-    reviewCount: productReviewCounts.get(product.id) ?? 0
+    reviewCount: productReviewCounts.get(product.id) ?? 0,
+    dimensions: product.dimensions ?? {}
   }));
+  const hasFilters = Boolean(search || category || stockStatus || customNotes || dimensions || perPage !== 100);
 
   return (
     <main className="page">
@@ -95,8 +103,7 @@ export default async function Dashboard({
         <div>
           <h1 className="page-title">WooCommerce Products</h1>
           <p className="page-copy">
-            Sync products from FCW, fix listing details, adjust categories and stock, then send
-            every change through approval before it touches WooCommerce.
+            Find products, select the ones you need, and prepare changes for approval.
           </p>
         </div>
         <div className="metrics">
@@ -114,52 +121,77 @@ export default async function Dashboard({
 
       {isReviewStorageMissing() ? <p className="error">{reviewStorageSetupMessage()}</p> : null}
 
-      <form className="toolbar">
-        <div className="field">
-          <label htmlFor="search">Search</label>
-          <input id="search" name="search" defaultValue={search} placeholder="Name, SKU, detail" />
+      <section className="product-filter-panel">
+        <div className="product-filter-head">
+          <div>
+            <Search size={18} />
+            <div>
+              <h2>Find products</h2>
+              <span>{productResult.total ?? products.length} results</span>
+            </div>
+          </div>
+          {hasFilters ? (
+            <Link className="button secondary compact-button" href="/">
+              <RotateCcw size={15} />
+              Clear filters
+            </Link>
+          ) : null}
         </div>
-        <div className="field">
-          <label htmlFor="category">Category</label>
-          <select id="category" name="category" defaultValue={category}>
-            <option value="">All categories</option>
-            {categoryOptions.map((option) => (
-              <option key={option.category.id} value={option.category.id}>
-                {option.path}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field">
-          <label htmlFor="stock_status">Stock</label>
-          <select id="stock_status" name="stock_status" defaultValue={stockStatus}>
-            <option value="">Any stock state</option>
-            <option value="instock">In stock</option>
-            <option value="outofstock">Out of stock</option>
-            <option value="onbackorder">On backorder</option>
-          </select>
-        </div>
-        <div className="field">
-          <label htmlFor="custom_notes">Custom notes</label>
-          <select id="custom_notes" name="custom_notes" defaultValue={customNotes}>
-            <option value="">Any custom notes</option>
-            <option value="yes">Custom notes: Yes</option>
-            <option value="no">Custom notes: No</option>
-          </select>
-        </div>
-        <div className="field">
-          <label htmlFor="per_page">Page size</label>
-          <select id="per_page" name="per_page" defaultValue={perPage}>
-            <option value="25">25</option>
-            <option value="50">50</option>
-            <option value="100">100</option>
-          </select>
-        </div>
-        <button className="button" type="submit">
-          <Filter size={17} />
-          Filter
-        </button>
-      </form>
+        <form className="product-filter-form">
+          <div className="field product-search-field">
+            <label htmlFor="search">Product name or SKU</label>
+            <input id="search" name="search" defaultValue={search} placeholder="Search products" />
+          </div>
+          <div className="field product-category-filter">
+            <label htmlFor="category">Category</label>
+            <select id="category" name="category" defaultValue={category}>
+              <option value="">All categories</option>
+              {categoryOptions.map((option) => (
+                <option key={option.category.id} value={option.category.id}>
+                  {option.path}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="stock_status">Availability</label>
+            <select id="stock_status" name="stock_status" defaultValue={stockStatus}>
+              <option value="">All availability</option>
+              <option value="instock">In stock</option>
+              <option value="outofstock">Out of stock</option>
+              <option value="onbackorder">On backorder</option>
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="custom_notes">Custom notes</label>
+            <select id="custom_notes" name="custom_notes" defaultValue={customNotes}>
+              <option value="">On or off</option>
+              <option value="yes">On</option>
+              <option value="no">Off</option>
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="dimensions">Dimensions</label>
+            <select id="dimensions" name="dimensions" defaultValue={dimensions}>
+              <option value="">Complete or missing</option>
+              <option value="missing">Missing</option>
+              <option value="complete">Complete</option>
+            </select>
+          </div>
+          <div className="field product-page-size">
+            <label htmlFor="per_page">Rows</label>
+            <select id="per_page" name="per_page" defaultValue={perPage}>
+              <option value="25">25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </div>
+          <button className="button" type="submit">
+            <Filter size={17} />
+            Show products
+          </button>
+        </form>
+      </section>
 
       <ProductBulkTable categories={categories} products={products} />
       <PaginationControls
@@ -169,6 +201,7 @@ export default async function Dashboard({
         search={search}
         stockStatus={stockStatus}
         customNotes={customNotes}
+        dimensions={dimensions}
         totalItems={productResult.total ?? products.length}
         totalPages={productResult.totalPages ?? 1}
       />

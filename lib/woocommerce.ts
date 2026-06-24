@@ -24,6 +24,7 @@ type GetProductsParams = {
   status?: string;
   fields?: string;
   include?: string;
+  dimensions?: string;
 };
 
 const requestDelayMs = Number(process.env.WOOCOMMERCE_REQUEST_DELAY_MS ?? (process.env.VERCEL ? 500 : 150));
@@ -171,6 +172,14 @@ export function productHasCustomNotes(product: { meta_data?: Array<{ key: string
   return normalized === "1" || normalized === "yes" || normalized === "true" || normalized === "on";
 }
 
+export function productHasDimensions(product: Pick<WooProduct, "dimensions">) {
+  return ["length", "width", "height"].every((field) => {
+    const value = product.dimensions?.[field as keyof NonNullable<WooProduct["dimensions"]>];
+
+    return Boolean(value?.trim());
+  });
+}
+
 function customNotesCacheKey(params: GetProductsParams) {
   return JSON.stringify({
     search: params.search ?? "",
@@ -217,16 +226,36 @@ async function getCustomNotesFilterProducts(params: GetProductsParams) {
   return uniqueProducts;
 }
 
-export async function getProductsByCustomNotes(params: GetProductsParams & { customNotes?: string }) {
-  if (params.customNotes !== "yes" && params.customNotes !== "no") {
+export async function getProductsByCustomNotes(
+  params: GetProductsParams & { customNotes?: string; dimensions?: string }
+) {
+  const hasCustomNotesFilter = params.customNotes === "yes" || params.customNotes === "no";
+  const hasDimensionsFilter = params.dimensions === "missing" || params.dimensions === "complete";
+
+  if (!hasCustomNotesFilter && !hasDimensionsFilter) {
     return getProducts(params);
   }
 
-  const target = params.customNotes === "yes";
   const page = params.page ?? 1;
   const perPage = params.perPage ?? 100;
   const products = await getCustomNotesFilterProducts(params);
-  const filtered = products.filter((product) => productHasCustomNotes(product) === target);
+  const filtered = products.filter((product) => {
+    if (
+      hasCustomNotesFilter &&
+      productHasCustomNotes(product) !== (params.customNotes === "yes")
+    ) {
+      return false;
+    }
+
+    if (
+      hasDimensionsFilter &&
+      productHasDimensions(product) !== (params.dimensions === "complete")
+    ) {
+      return false;
+    }
+
+    return true;
+  });
   const start = (page - 1) * perPage;
   const total = filtered.length;
 
