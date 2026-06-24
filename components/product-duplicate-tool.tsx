@@ -1,24 +1,29 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Edit3, ExternalLink, GitMerge, ShieldCheck } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronDown,
+  Copy,
+  Edit3,
+  ExternalLink,
+  GitBranch,
+  GitMerge,
+  Search,
+  ShieldCheck
+} from "lucide-react";
 
 import {
   buildProductMergeChanges,
   defaultProductMergeTarget,
-  getProductCompletenessScore,
   getProductDetailMatches,
   getProductDetailSummary,
   getProductDuplicateSignals,
   type DuplicateProductGroup
 } from "@/lib/product-duplicates";
 import type { WooProduct } from "@/lib/types";
-
-function productLabel(product: WooProduct) {
-  return `#${product.id} - ${product.sku || "No SKU"} - ${product.name}`;
-}
 
 function categoryText(product: WooProduct) {
   return product.categories.map((category) => category.name).filter(Boolean).join(", ") || "Uncategorized";
@@ -36,6 +41,21 @@ function defaultVariationOption(product: WooProduct) {
   return product.sku || product.name || `Product ${product.id}`;
 }
 
+function groupSearchText(group: DuplicateProductGroup) {
+  return [
+    group.title,
+    ...group.matchReasons,
+    ...group.products.flatMap((product) => [
+      product.id,
+      product.name,
+      product.sku,
+      categoryText(product)
+    ])
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
 export default function ProductDuplicateTool({
   groups,
   productsScanned
@@ -50,6 +70,19 @@ export default function ProductDuplicateTool({
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [openGroups, setOpenGroups] = useState<Set<string>>(
+    () => new Set(groups[0] ? [groups[0].key] : [])
+  );
+  const filteredGroups = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    return query ? groups.filter((group) => groupSearchText(group).includes(query)) : groups;
+  }, [groups, search]);
+  const flaggedProductCount = useMemo(
+    () => new Set(groups.flatMap((group) => group.products.map((product) => product.id))).size,
+    [groups]
+  );
 
   async function createMergeReview(group: DuplicateProductGroup, source: WooProduct) {
     const targetId = targetByGroup[group.key] ?? defaultProductMergeTarget(group.products).id;
@@ -113,17 +146,24 @@ export default function ProductDuplicateTool({
     <section className="product-duplicate-section">
       <div className="category-merge-head">
         <div>
-          <h2>Duplicate Product Check</h2>
+          <h2>Review duplicate candidates</h2>
           <p className="page-copy">
-            Products are grouped when names match or SKU values overlap. Pick the product to keep,
-            compare details, then create a merge review.
+            Select the listing to keep, choose how the other listing should be handled, and send
+            the decision to the Review Queue.
           </p>
         </div>
-        <span className="metric">
-          <ShieldCheck size={18} />
-          <strong>{groups.length}</strong>
-          Duplicate groups
-        </span>
+        <div className="metrics">
+          <span className="metric">
+            <ShieldCheck size={18} />
+            <strong>{groups.length}</strong>
+            Groups
+          </span>
+          <span className="metric">
+            <Copy size={18} />
+            <strong>{flaggedProductCount}</strong>
+            Products flagged
+          </span>
+        </div>
       </div>
 
       {message ? <p className="notice">{message}</p> : null}
@@ -132,74 +172,129 @@ export default function ProductDuplicateTool({
       {groups.length === 0 ? (
         <div className="empty panel">No duplicate products found in this scan.</div>
       ) : (
-        <div className="duplicate-groups">
-          {groups.map((group) => {
+        <>
+          <div className="duplicate-list-toolbar">
+            <label className="duplicate-search">
+              <Search size={17} />
+              <input
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search product name, SKU, ID, or category"
+              />
+            </label>
+            <span className="subtle">
+              {filteredGroups.length} of {groups.length} groups
+            </span>
+          </div>
+
+          {filteredGroups.length === 0 ? (
+            <div className="empty panel">No duplicate groups match this search.</div>
+          ) : (
+          <div className="duplicate-groups">
+          {filteredGroups.map((group) => {
             const targetId = targetByGroup[group.key] ?? defaultProductMergeTarget(group.products).id;
             const target = group.products.find((product) => product.id === targetId) ?? group.products[0];
+            const recommendedTarget = defaultProductMergeTarget(group.products);
             const mode = modeByGroup[group.key] ?? "duplicate";
             const variationAttributeName = attributeByGroup[group.key] ?? "Variant";
 
             return (
-              <article className="duplicate-card" key={group.key}>
-                <div className="duplicate-card-head">
-                  <div>
-                    <h3>{group.title}</h3>
-                    <span className="subtle">
-                      {group.products.length} products matched by {group.matchReasons.join(", ")}
-                    </span>
+              <details
+                className="duplicate-card duplicate-review-group"
+                key={group.key}
+                open={openGroups.has(group.key)}
+                onToggle={(event) => {
+                  const isOpen = event.currentTarget.open;
+
+                  setOpenGroups((current) => {
+                    const next = new Set(current);
+
+                    if (isOpen) {
+                      next.add(group.key);
+                    } else {
+                      next.delete(group.key);
+                    }
+
+                    return next;
+                  });
+                }}
+              >
+                <summary className="duplicate-group-summary">
+                  <div className="duplicate-group-title">
+                    <ChevronDown className="duplicate-group-chevron" size={18} />
+                    <div>
+                      <h3>{group.title}</h3>
+                      <span className="subtle">{group.products.length} possible matches</span>
+                    </div>
                   </div>
-                  <div className="product-merge-controls">
-                    <div className="field">
-                      <label htmlFor={`product-target-${group.key}`}>Keep product</label>
-                      <select
-                        id={`product-target-${group.key}`}
-                        value={targetId}
-                        onChange={(event) =>
-                          setTargetByGroup((current) => ({
-                            ...current,
-                            [group.key]: Number(event.target.value)
-                          }))
-                        }
-                      >
-                        {group.products.map((product) => (
-                          <option key={product.id} value={product.id}>
-                            {productLabel(product)} ({getProductCompletenessScore(product)} detail score)
-                          </option>
-                        ))}
-                      </select>
+                  <div className="duplicate-group-signals">
+                    {group.matchReasons.map((reason) => (
+                      <span className="duplicate-signal" key={reason}>{reason}</span>
+                    ))}
+                    <span className="status neutral">Keep #{targetId}</span>
+                  </div>
+                </summary>
+
+                <div className="duplicate-decision-panel">
+                  <div className="duplicate-decision-heading">
+                    <div>
+                      <span className="duplicate-step-label">Product to keep</span>
+                      <strong>#{target.id} {target.name}</strong>
                     </div>
-                    <div className="field">
-                      <label htmlFor={`merge-mode-${group.key}`}>Merge as</label>
-                      <select
-                        id={`merge-mode-${group.key}`}
-                        value={mode}
-                        onChange={(event) =>
-                          setModeByGroup((current) => ({
-                            ...current,
-                            [group.key]: event.target.value === "variation" ? "variation" : "duplicate"
-                          }))
-                        }
-                      >
-                        <option value="duplicate">Duplicate product</option>
-                        <option value="variation">Variable product</option>
-                      </select>
-                    </div>
-                    {mode === "variation" ? (
-                      <div className="field">
-                        <label htmlFor={`variation-attribute-${group.key}`}>Variant attribute</label>
-                        <input
-                          id={`variation-attribute-${group.key}`}
-                          value={variationAttributeName}
-                          onChange={(event) =>
-                            setAttributeByGroup((current) => ({
-                              ...current,
-                              [group.key]: event.target.value
-                            }))
-                          }
-                        />
-                      </div>
+                    {target.id === recommendedTarget.id ? (
+                      <span className="status approved">
+                        <CheckCircle2 size={14} />
+                        Recommended
+                      </span>
                     ) : null}
                   </div>
+
+                  <div className="duplicate-mode-picker" aria-label="Merge type">
+                    <button
+                      className={mode === "duplicate" ? "active" : ""}
+                      type="button"
+                      onClick={() =>
+                        setModeByGroup((current) => ({ ...current, [group.key]: "duplicate" }))
+                      }
+                    >
+                      <Copy size={18} />
+                      <span>
+                        <strong>Merge duplicate</strong>
+                        <small>Combine missing details and hide the other listing.</small>
+                      </span>
+                    </button>
+                    <button
+                      className={mode === "variation" ? "active" : ""}
+                      type="button"
+                      onClick={() =>
+                        setModeByGroup((current) => ({ ...current, [group.key]: "variation" }))
+                      }
+                    >
+                      <GitBranch size={18} />
+                      <span>
+                        <strong>Create variations</strong>
+                        <small>Keep both choices under one variable product.</small>
+                      </span>
+                    </button>
+                  </div>
+
+                  {mode === "variation" ? (
+                    <div className="field duplicate-variant-field">
+                      <label htmlFor={`variation-attribute-${group.key}`}>Variation name</label>
+                      <input
+                        id={`variation-attribute-${group.key}`}
+                        value={variationAttributeName}
+                        onChange={(event) =>
+                          setAttributeByGroup((current) => ({
+                            ...current,
+                            [group.key]: event.target.value
+                          }))
+                        }
+                        placeholder="Example: Size, Model, Capacity"
+                      />
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="product-duplicate-compare">
@@ -229,6 +324,21 @@ export default function ProductDuplicateTool({
                             <span className="product-duplicate-image" aria-hidden />
                           )}
                           <div>
+                            <label className="duplicate-keep-choice">
+                              <input
+                                type="radio"
+                                name={`keep-${group.key}`}
+                                value={product.id}
+                                checked={isTarget}
+                                onChange={() =>
+                                  setTargetByGroup((current) => ({
+                                    ...current,
+                                    [group.key]: product.id
+                                  }))
+                                }
+                              />
+                              <span>{isTarget ? "Selected to keep" : "Keep this product"}</span>
+                            </label>
                             <strong>
                               #{product.id} {product.name}
                             </strong>
@@ -246,8 +356,10 @@ export default function ProductDuplicateTool({
                         </div>
 
                         <div>
-                          <span className="subtle">Listing</span>
-                          <strong>{product.status}</strong>
+                          <span className="duplicate-column-label">Listing</span>
+                          <strong className={`status ${product.status === "publish" ? "approved" : "neutral"}`}>
+                            {product.status}
+                          </strong>
                           <small>
                             {product.regular_price ? `GBP ${product.regular_price}` : "No regular price"} /{" "}
                             {product.stock_status}
@@ -255,14 +367,18 @@ export default function ProductDuplicateTool({
                         </div>
 
                         <div>
-                          <span className="subtle">Details</span>
-                          <strong>{detailSummary.score}</strong>
+                          <span className="duplicate-column-label">Completeness</span>
+                          <strong>{detailSummary.score} points</strong>
                           <small>{detailSummary.facts.slice(0, 5).join(", ")}</small>
                         </div>
 
                         <div>
-                          <span className="subtle">Checks</span>
-                          <small>{duplicateSignals.join(", ")}</small>
+                          <span className="duplicate-column-label">Why it matched</span>
+                          <div className="duplicate-signal-list">
+                            {duplicateSignals.map((signal) => (
+                              <span className="duplicate-signal" key={signal}>{signal}</span>
+                            ))}
+                          </div>
                           {mode === "variation" ? (
                             <small>Variant option: {defaultVariationOption(product)}</small>
                           ) : null}
@@ -285,27 +401,40 @@ export default function ProductDuplicateTool({
                             </a>
                           ) : null}
                           {isTarget ? (
-                            <span className="status approved">Target</span>
+                            <span className="status approved">
+                              <CheckCircle2 size={14} />
+                              Kept product
+                            </span>
                           ) : (
-                            <button
-                              className="button secondary"
-                              type="button"
-                              disabled={busyKey !== null}
-                              onClick={() => createMergeReview(group, product)}
-                            >
-                              <GitMerge size={17} />
-                              {busy ? "Creating" : mode === "variation" ? "Variation Review" : "Merge Review"}
-                            </button>
+                            <>
+                              <span className="duplicate-outcome">
+                                {mode === "variation"
+                                  ? `Becomes a ${variationAttributeName || "Variant"} option`
+                                  : "Details merge into kept product; listing becomes hidden"}
+                              </span>
+                              <button
+                                className="button"
+                                type="button"
+                                disabled={busyKey !== null}
+                                onClick={() => createMergeReview(group, product)}
+                              >
+                                <GitMerge size={17} />
+                                {busy ? "Creating review" : "Send to review"}
+                              </button>
+                            </>
                           )}
                         </div>
 
                         {preview ? (
                           <details className="product-merge-preview">
                             <summary className="subtle">
-                              {mode === "variation"
-                                ? `Review preview: variable product, ${preview.targetVariation ? "kept product variation, " : ""}duplicate variation`
-                                : `Review preview: ${changeCount(preview.targetChanges)} target changes, ${changeCount(preview.sourceChanges)} duplicate changes`}
+                              Advanced change preview
                             </summary>
+                            <p className="subtle">
+                              {mode === "variation"
+                                ? `Creates a variable product with ${preview.targetVariation ? "a kept-product variation and " : ""}a variation from this listing.`
+                                : `${changeCount(preview.targetChanges)} kept-product fields and ${changeCount(preview.sourceChanges)} duplicate-product fields will change.`}
+                            </p>
                             <pre className="json-box">
                               {JSON.stringify(
                                 {
@@ -327,10 +456,12 @@ export default function ProductDuplicateTool({
                     );
                   })}
                 </div>
-              </article>
+              </details>
             );
           })}
-        </div>
+          </div>
+          )}
+        </>
       )}
     </section>
   );

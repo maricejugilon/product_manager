@@ -42,8 +42,8 @@ export default async function DuplicateProductsPage({
         <div>
           <h1 className="page-title">Duplicate Products</h1>
           <p className="page-copy">
-            Scan products by matching product names and SKU overlap, compare the listing details,
-            and send any merge through the review queue before WooCommerce is changed.
+            Review products flagged by matching names or SKU values. Every merge remains pending
+            until it is approved in the Review Queue.
           </p>
         </div>
         <span className="metric">
