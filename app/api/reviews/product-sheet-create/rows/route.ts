@@ -23,6 +23,33 @@ export async function GET() {
       return Number.isInteger(rowNumber) ? rowNumber : 0;
     })
     .filter((rowNumber) => rowNumber > 0);
+  const fixesByRow: Record<string, string[]> = {};
 
-  return NextResponse.json({ rowNumbers: [...new Set(rowNumbers)] });
+  for (const review of reviews) {
+    if (
+      review.resource !== "product" ||
+      review.action !== "update" ||
+      (review.status !== "pending" && review.status !== "failed")
+    ) {
+      continue;
+    }
+
+    const before = isRecord(review.before) ? review.before : {};
+
+    if (before.source !== "product_sheet_validator_fix") {
+      continue;
+    }
+
+    const row = isRecord(before.row) ? before.row : {};
+    const rowNumber = Number(row.rowNumber);
+    const fields = Array.isArray(before.fields)
+      ? before.fields.filter((field): field is string => typeof field === "string")
+      : [];
+
+    if (Number.isInteger(rowNumber) && rowNumber > 0) {
+      fixesByRow[String(rowNumber)] = [...new Set([...(fixesByRow[String(rowNumber)] ?? []), ...fields])];
+    }
+  }
+
+  return NextResponse.json({ rowNumbers: [...new Set(rowNumbers)], fixesByRow });
 }

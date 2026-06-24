@@ -1,5 +1,6 @@
 import "server-only";
 
+import { COLOUR_BOARD_CHOICES } from "@/lib/colour-board-choices";
 import { getProductSheetRow, type SheetCategoryHierarchy, type SheetProductRow } from "@/lib/product-sheet";
 import type { ProductChanges, WooCategory } from "@/lib/types";
 import { getCategories, getProducts } from "@/lib/woocommerce";
@@ -20,7 +21,7 @@ type CategoryResolution = {
   warnings: string[];
 };
 
-type AccessoryItem = {
+export type AccessoryItem = {
   name?: string;
   sku?: string;
   price?: string;
@@ -31,7 +32,7 @@ type AccessoryItem = {
   notes?: string;
 };
 
-type ColourBoardOption = {
+export type ColourBoardOption = {
   option_group?: string;
   color_name?: string;
   color_hex?: string;
@@ -124,6 +125,21 @@ function findValue(values: Record<string, string>, includes: string[]) {
 
 function sheetField(row: SheetProductRow, aliases: string[]) {
   return fieldValue(row.values, aliases) || aliases.map((alias) => findValue(row.values, alias.split(/\s+/))).find(Boolean) || "";
+}
+
+function exactSheetField(row: SheetProductRow, header: string) {
+  return Object.entries(row.values).find(([key]) => key.trim() === header)?.[1]?.trim() ?? "";
+}
+
+function isYes(value: string) {
+  return ["1", "yes", "true", "on"].includes(normalizeText(value));
+}
+
+function pipeValues(value: string) {
+  return value
+    .split(/\s*\|\s*/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function parseMoney(value: string) {
@@ -308,16 +324,73 @@ function sheetPrice(row: SheetProductRow) {
   );
 }
 
-function rowAccessories(row: SheetProductRow) {
-  return safeJsonParse<AccessoryItem>(
-    sheetField(row, ["meta:product_accessories", "product_accessories", "product accessories"])
-  ).filter((item) => item && typeof item === "object");
+export function sheetCustomNotesExpected(row: SheetProductRow) {
+  return isYes(exactSheetField(row, "custom notes"));
 }
 
-function rowColourOptions(row: SheetProductRow) {
-  return safeJsonParse<ColourBoardOption>(
+export function sheetColourBoardExpected(row: SheetProductRow) {
+  return isYes(exactSheetField(row, "Color"));
+}
+
+export function sheetAccessoriesExpected(row: SheetProductRow) {
+  return isYes(exactSheetField(row, "Accessories"));
+}
+
+export function rowAccessories(row: SheetProductRow) {
+  const json = safeJsonParse<AccessoryItem>(
+    sheetField(row, ["meta:product_accessories", "product_accessories", "product accessories"])
+  ).filter((item) => item && typeof item === "object");
+
+  if (json.length > 0) {
+    return json;
+  }
+
+  return pipeValues(exactSheetField(row, "accessories"))
+    .filter((name) => !/^(?:error|no accessories)$/i.test(name))
+    .filter((name) => normalizeText(name) !== normalizeText(row.name))
+    .map((name) => ({
+      name,
+      relationship_type: "recommended",
+      option_group: "Frequently bought with these accessories"
+    }));
+}
+
+export function rowColourOptions(row: SheetProductRow) {
+  const json = safeJsonParse<ColourBoardOption>(
     sheetField(row, ["meta:legacy_colour_board_options", "legacy_colour_board_options", "meta:color_options", "color_options"])
   ).filter((item) => item && typeof item === "object");
+
+  if (json.length > 0) {
+    return json;
+  }
+
+  const choicesByName = new Map(
+    COLOUR_BOARD_CHOICES.map((choice) => [normalizeText(choice.color_name), choice])
+  );
+
+  return pipeValues(exactSheetField(row, "color"))
+    .filter((name) => !/^(?:error|no colou?r option)$/i.test(name))
+    .map((name) => {
+      const choice = choicesByName.get(normalizeText(name));
+
+      return choice
+        ? {
+            option_group: choice.option_group,
+            color_name: choice.color_name,
+            color_hex: choice.color_hex,
+            swatch_image_url: choice.swatch_image_url,
+            option_image_url: choice.option_image_url,
+            price_adjustment: choice.price_adjustment,
+            default_option: choice.default_option,
+            notes: choice.notes
+          }
+        : {
+            option_group: "Personalise this item with coloured board",
+            color_name: name,
+            price_adjustment: "0",
+            default_option: false
+          };
+    });
 }
 
 async function findAccessoryProduct(accessory: AccessoryItem) {
@@ -353,7 +426,7 @@ async function findAccessoryProduct(accessory: AccessoryItem) {
   return undefined;
 }
 
-async function resolveAccessoryCrossSells(accessories: AccessoryItem[]) {
+export async function resolveAccessoryCrossSells(accessories: AccessoryItem[]) {
   const ids: number[] = [];
   const linkedNames: string[] = [];
   const linkedSkus: string[] = [];
@@ -390,7 +463,7 @@ async function resolveAccessoryCrossSells(accessories: AccessoryItem[]) {
   };
 }
 
-function buildColourBoardAcfPayload(options: ColourBoardOption[]) {
+export function buildColourBoardAcfPayload(options: ColourBoardOption[]) {
   const items = options
     .map((option) => {
       const name = String(option.color_name ?? "").trim();
@@ -427,7 +500,7 @@ function buildColourBoardAcfPayload(options: ColourBoardOption[]) {
   };
 }
 
-function colourBoardPersonalizationMeta(options: ColourBoardOption[]) {
+export function colourBoardPersonalizationMeta(options: ColourBoardOption[]) {
   const items = options
     .map((option) => ({
       name: String(option.color_name ?? "").trim(),
@@ -558,6 +631,7 @@ export async function buildProductCreateDraft(rowNumber: number) {
   const regularPrice = sheetPrice(row) || scraped.price;
   const rawAccessoriesJson = accessories.length > 0 ? JSON.stringify(accessories) : "";
   const rawColourJson = colourOptions.length > 0 ? JSON.stringify(colourOptions) : "";
+  const customNotes = sheetCustomNotesExpected(row);
   const changes: ProductChanges = {
     type: "simple",
     name: productName,
@@ -580,6 +654,7 @@ export async function buildProductCreateDraft(rowNumber: number) {
       { key: "_fcw_source_image_urls", value: scraped.images },
       { key: "_fcw_sheet_category_hierarchy", value: row.categoryHierarchy.map((category) => category.label) },
       { key: "_fcw_migration_warnings", value: [...categoryResolution.warnings, ...accessoryCrossSells.missing.map((item) => `Missing accessory cross-sell: ${item}`)] },
+      { key: "custom_notes", value: customNotes ? "1" : "0" },
       { key: "product_accessories", value: rawAccessoriesJson },
       { key: "_fcw_accessory_cross_sell_ids", value: JSON.stringify(accessoryCrossSells.ids) },
       { key: "_fcw_accessory_cross_sell_names", value: JSON.stringify(accessoryCrossSells.linkedNames) },

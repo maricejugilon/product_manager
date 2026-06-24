@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ShieldCheck, Trash2 } from "lucide-react";
+import { AlertCircle, ChevronLeft, ChevronRight, FolderTree, Search, ShieldCheck, Trash2 } from "lucide-react";
 
 import { getDirectChildren, getHierarchicalCategoryOptions } from "@/lib/category-utils";
 import type { WooCategory } from "@/lib/types";
@@ -12,6 +12,9 @@ export default function CategoryCleanupTool({ categories }: { categories: WooCat
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [search, setSearch] = useState("");
+  const [view, setView] = useState<"ready" | "parents" | "all">("ready");
+  const [page, setPage] = useState(1);
   const emptyCategories = useMemo(
     () =>
       getHierarchicalCategoryOptions(categories)
@@ -23,6 +26,31 @@ export default function CategoryCleanupTool({ categories }: { categories: WooCat
     [categories]
   );
   const safeDeleteCount = emptyCategories.filter((item) => item.children.length === 0).length;
+  const parentCount = emptyCategories.length - safeDeleteCount;
+  const visibleCategories = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    return emptyCategories.filter((item) => {
+      const matchesSearch =
+        !query ||
+        item.path.toLowerCase().includes(query) ||
+        item.category.slug.toLowerCase().includes(query);
+      const matchesView =
+        view === "all" ||
+        (view === "ready" && item.children.length === 0) ||
+        (view === "parents" && item.children.length > 0);
+
+      return matchesSearch && matchesView;
+    });
+  }, [emptyCategories, search, view]);
+  const pageSize = 20;
+  const totalPages = Math.max(1, Math.ceil(visibleCategories.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pagedCategories = visibleCategories.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, view]);
 
   async function createDeleteReview(category: WooCategory) {
     const confirmed = window.confirm(
@@ -61,17 +89,24 @@ export default function CategoryCleanupTool({ categories }: { categories: WooCat
     <section className="category-cleanup-section">
       <div className="category-merge-head">
         <div>
-          <h2>Category Cleanup</h2>
+          <h2>Unused categories</h2>
           <p className="page-copy">
-            List categories with no assigned products. Empty leaf categories can be sent to review
-            for deletion; parent categories should be cleaned after their children.
+            These categories contain no products. Categories without subcategories can be safely
+            sent for removal. Parent categories must wait until their subcategories are handled.
           </p>
         </div>
-        <span className="metric">
-          <ShieldCheck size={18} />
-          <strong>{safeDeleteCount}</strong>
-          Safe cleanup
-        </span>
+        <div className="metrics">
+          <span className="metric">
+            <ShieldCheck size={18} />
+            <strong>{safeDeleteCount}</strong>
+            Ready to remove
+          </span>
+          <span className="metric">
+            <FolderTree size={18} />
+            <strong>{parentCount}</strong>
+            Need subcategories first
+          </span>
+        </div>
       </div>
 
       {message ? <p className="notice">{message}</p> : null}
@@ -80,8 +115,41 @@ export default function CategoryCleanupTool({ categories }: { categories: WooCat
       {emptyCategories.length === 0 ? (
         <div className="empty panel">No empty categories found.</div>
       ) : (
-        <div className="category-cleanup-list">
-          {emptyCategories.map((item) => {
+        <>
+          <div className="cleanup-list-toolbar">
+            <label className="cleanup-search">
+              <Search size={17} />
+              <input
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search unused categories"
+              />
+            </label>
+            <div className="cleanup-view-tabs" aria-label="Unused category filters">
+              {[
+                ["ready", `Ready to remove (${safeDeleteCount})`],
+                ["parents", `Has subcategories (${parentCount})`],
+                ["all", `All (${emptyCategories.length})`]
+              ].map(([value, label]) => (
+                <button
+                  className={view === value ? "active" : ""}
+                  key={value}
+                  type="button"
+                  onClick={() => setView(value as typeof view)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {visibleCategories.length === 0 ? (
+            <div className="empty panel">No unused categories match this view.</div>
+          ) : (
+          <>
+          <div className="category-cleanup-list">
+          {pagedCategories.map((item) => {
             const canDelete = item.children.length === 0;
             const busy = busyId === item.category.id;
 
@@ -89,18 +157,22 @@ export default function CategoryCleanupTool({ categories }: { categories: WooCat
               <article className="category-cleanup-row" key={item.category.id}>
                 <div>
                   <strong>{item.path}</strong>
-                  <span className="subtle">
-                    #{item.category.id} / Parent #{item.category.parent || "none"}
-                  </span>
+                  <span className="subtle">Web address: /product-category/{item.category.slug || "no-address"}</span>
                 </div>
                 <div>
-                  <span className="subtle">Products</span>
-                  <strong>{item.category.count ?? 0}</strong>
+                  <span className="subtle">Why it is listed</span>
+                  <strong>No products assigned</strong>
                 </div>
                 <div>
-                  <span className="subtle">Children</span>
-                  <strong>{item.children.length}</strong>
-                  <small>{item.children.map((child) => child.name).join(", ") || "None"}</small>
+                  <span className="subtle">What happens next</span>
+                  {canDelete ? (
+                    <small>This category can be removed after review approval.</small>
+                  ) : (
+                    <>
+                      <strong>{item.children.length} subcategories</strong>
+                      <small>{item.children.map((child) => child.name).join(", ")}</small>
+                    </>
+                  )}
                 </div>
                 <div className="actions">
                   {canDelete ? (
@@ -111,16 +183,51 @@ export default function CategoryCleanupTool({ categories }: { categories: WooCat
                       onClick={() => createDeleteReview(item.category)}
                     >
                       <Trash2 size={17} />
-                      {busy ? "Creating" : "Delete Review"}
+                      {busy ? "Creating review" : "Review removal"}
                     </button>
                   ) : (
-                    <span className="status neutral">Has children</span>
+                    <span className="cleanup-blocked">
+                      <AlertCircle size={16} />
+                      Handle subcategories first
+                    </span>
                   )}
                 </div>
               </article>
             );
           })}
-        </div>
+          </div>
+          {totalPages > 1 ? (
+            <div className="cleanup-pager">
+              <span className="subtle">
+                Showing {(safePage - 1) * pageSize + 1}-{Math.min(safePage * pageSize, visibleCategories.length)} of{" "}
+                {visibleCategories.length}
+              </span>
+              <div>
+                <button
+                  className="icon-button secondary"
+                  type="button"
+                  disabled={safePage <= 1}
+                  onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  title="Previous page"
+                >
+                  <ChevronLeft size={17} />
+                </button>
+                <strong>{safePage} / {totalPages}</strong>
+                <button
+                  className="icon-button secondary"
+                  type="button"
+                  disabled={safePage >= totalPages}
+                  onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                  title="Next page"
+                >
+                  <ChevronRight size={17} />
+                </button>
+              </div>
+            </div>
+          ) : null}
+          </>
+          )}
+        </>
       )}
     </section>
   );
