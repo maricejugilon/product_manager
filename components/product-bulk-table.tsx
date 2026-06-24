@@ -522,7 +522,7 @@ export default function ProductBulkTable({
               </th>
               <th>Product</th>
               <th>Inventory</th>
-              <th>Organisation</th>
+              <th>Category</th>
               <th>Product details</th>
               <th>Review status</th>
               <th aria-label="Edit product" />
