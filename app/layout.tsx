@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ClipboardCheck, CopyCheck, FileSpreadsheet, Layers3, LogOut, PackageSearch, Trash2 } from "lucide-react";
+import { ClipboardCheck, CopyCheck, FileSpreadsheet, Layers3, LogOut, PackageSearch, Tags, Trash2 } from "lucide-react";
 
 import "./globals.css";
 
@@ -38,6 +38,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Link href="/product-sheet-validator">
               <FileSpreadsheet size={17} />
               Sheet Validator
+            </Link>
+            <Link href="/make-and-model">
+              <Tags size={17} />
+              Make and Model
             </Link>
             <Link href="/reviews">
               <ClipboardCheck size={17} />

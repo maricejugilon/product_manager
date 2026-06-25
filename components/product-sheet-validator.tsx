@@ -18,6 +18,8 @@ import {
   Wrench
 } from "lucide-react";
 
+import PageHelp from "@/components/page-help";
+import PagePurpose from "@/components/page-purpose";
 import ProgressBar from "@/components/progress-bar";
 import type { ProductSheetValidationResult } from "@/lib/product-sheet-validator";
 import type { WooOnlyProduct } from "@/lib/product-sheet-woo-only";
@@ -669,6 +671,44 @@ export default function ProductSheetValidator() {
           </p>
         </div>
         <div className="metrics">
+          <PageHelp
+            title="How to use Product Sheet Validator"
+            intro="Compare Google Sheet product data with WooCommerce and prepare fixes without automatically changing the store."
+            steps={[
+              {
+                title: "Choose a validation view",
+                description:
+                  "Start with products not found, then check category, custom notes, colour board, and accessories issues separately."
+              },
+              {
+                title: "Open the comparison",
+                description:
+                  "Review the sheet value beside the current WooCommerce value. Hover or open details when a value is shortened."
+              },
+              {
+                title: "Refresh the right source",
+                description:
+                  "Use Sync to rebuild data from the sheet. Use Refresh Woo to recheck current WooCommerce values."
+              },
+              {
+                title: "Prepare a fix",
+                description:
+                  "Create a missing product or send one field correction to Review Queue, then approve it there."
+              }
+            ]}
+            termsTitle="Important views"
+            terms={[
+              { term: "Not in Woo", description: "The sheet row could not be matched to a WooCommerce product." },
+              { term: "Category issue", description: "The sheet hierarchy and WooCommerce categories differ." },
+              { term: "Woo only", description: "The product exists in WooCommerce but is not present in the sheet." },
+              { term: "Cached", description: "Saved report rows that load quickly without a full new sync." }
+            ]}
+            safety={
+              <>
+                <strong>Validation is read-only until you create a review.</strong> Fixes and new products still require approval in Review Queue.
+              </>
+            }
+          />
           <span className="metric">
             <FileSpreadsheet size={18} />
             <strong>{total || results.length}</strong>
@@ -704,6 +744,14 @@ export default function ProductSheetValidator() {
           </button>
         </div>
       </div>
+
+      <PagePurpose
+        compact
+        icon={<FileSpreadsheet size={20} />}
+        title="Compare the Product List sheet with WooCommerce"
+        description="Use this reporting page to find missing products and differences in categories, custom notes, colour board options, accessories, and other migrated product data."
+        note={<><strong>Start with No match.</strong><span>Sync reads the sheet; Refresh Woo checks the latest store values.</span></>}
+      />
 
       {isLoading || isSyncing || isRefreshing ? (
         <ProgressBar

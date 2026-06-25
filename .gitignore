@@ -21,6 +21,7 @@ data/product-sheet-validator-cache-sync.json
 .codex
 .agents
 .runtime
+.git-tools
 *.patch
 *.diff
 scripts/start-next.cmd

@@ -7,6 +7,7 @@ import {
   createCategory,
   createProduct,
   deleteCategory,
+  ensureProductAttributeTerms,
   mergeCategoryIntoTarget,
   mergeProductIntoTarget,
   updateCategory,
@@ -27,6 +28,30 @@ export type ApproveAllResult = {
 
 async function publishReview(review: ReviewRecord) {
   if (review.resource === "product" && review.action === "update" && review.resourceId) {
+    const before = review.before as {
+      source?: string;
+      attributeConfig?: {
+        make?: { id?: number };
+        model?: { id?: number };
+      };
+      expected?: {
+        make?: string[];
+        model?: string[];
+      };
+    } | null;
+
+    if (before?.source === "make_model_sheet") {
+      const makeAttributeId = Number(before.attributeConfig?.make?.id);
+      const modelAttributeId = Number(before.attributeConfig?.model?.id);
+
+      if (!Number.isInteger(makeAttributeId) || !Number.isInteger(modelAttributeId)) {
+        throw new Error("Make and Model attribute configuration is missing from this review.");
+      }
+
+      await ensureProductAttributeTerms(makeAttributeId, before.expected?.make ?? []);
+      await ensureProductAttributeTerms(modelAttributeId, before.expected?.model ?? []);
+    }
+
     const changes = await resolveColourBoardImagesInChanges(review.changes as ProductChanges);
 
     return updateProduct(review.resourceId, changes);

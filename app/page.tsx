@@ -2,6 +2,8 @@ import Link from "next/link";
 import { Filter, PackageCheck, RotateCcw, Search } from "lucide-react";
 
 import PaginationControls from "@/components/pagination-controls";
+import PageHelp from "@/components/page-help";
+import PagePurpose from "@/components/page-purpose";
 import ProductBulkTable from "@/components/product-bulk-table";
 import { getHierarchicalCategoryOptions } from "@/lib/category-utils";
 import { getCategories, getProductsByCustomNotes, productHasCustomNotes } from "@/lib/woocommerce";
@@ -107,6 +109,40 @@ export default async function Dashboard({
           </p>
         </div>
         <div className="metrics">
+          <PageHelp
+            title="How to manage products"
+            intro="Find the products you need, prepare individual or bulk changes, and review them before publishing."
+            steps={[
+              {
+                title: "Find products",
+                description: "Search by product name or SKU, then narrow the list using category, availability, custom notes, or dimensions."
+              },
+              {
+                title: "Select products",
+                description: "Tick one or more products in the list. The action area shows the bulk tools available for your selection."
+              },
+              {
+                title: "Prepare a change",
+                description: "Update stock, category, custom notes, or dimensions. Open a product to edit its complete details."
+              },
+              {
+                title: "Approve the review",
+                description: "Open Review Queue, check the proposed change, then approve or reject it."
+              }
+            ]}
+            termsTitle="Useful filters"
+            terms={[
+              { term: "Custom notes", description: "Show products where the custom notes option is on or off." },
+              { term: "Dimensions", description: "Find products with complete or missing WooCommerce dimensions." },
+              { term: "Pending reviews", description: "Products already waiting for approval are clearly marked." },
+              { term: "Rows", description: "Choose how many products appear on each page." }
+            ]}
+            safety={
+              <>
+                <strong>Bulk actions create review drafts.</strong> Check the selected products and values before approving them in Review Queue.
+              </>
+            }
+          />
           <span className="metric">
             <PackageCheck size={18} />
             <strong>{productResult.total ?? productResult.data.length}</strong>
@@ -118,6 +154,13 @@ export default async function Dashboard({
           </Link>
         </div>
       </div>
+
+      <PagePurpose
+        icon={<PackageCheck size={22} />}
+        title="Find and maintain your WooCommerce products"
+        description="Use this page for everyday product work: search the catalogue, check stock and category information, open full product details, or prepare bulk updates for several products at once."
+        note={<><strong>Product assignment happens here.</strong><span>Select products before choosing a bulk action.</span></>}
+      />
 
       {isReviewStorageMissing() ? <p className="error">{reviewStorageSetupMessage()}</p> : null}
 

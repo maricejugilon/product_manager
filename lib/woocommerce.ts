@@ -7,7 +7,9 @@ import type {
   CategoryMergeChanges,
   ProductMergeChanges,
   ProductChanges,
+  WooAttributeTerm,
   WooCategory,
+  WooGlobalAttribute,
   WooProduct,
   WooProductVariation
 } from "@/lib/types";
@@ -31,6 +33,7 @@ const requestDelayMs = Number(process.env.WOOCOMMERCE_REQUEST_DELAY_MS ?? (proce
 let nextRequestAt = 0;
 const customNotesCacheTtlMs = 5 * 60 * 1000;
 const customNotesProductCache = new Map<string, { expiresAt: number; products: WooProduct[] }>();
+const attributeTermCache = new Map<number, { expiresAt: number; terms: WooAttributeTerm[] }>();
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -154,6 +157,85 @@ export async function getProducts(params: GetProductsParams) {
 export async function getProduct(id: number) {
   const { data } = await wcFetch<WooProduct>(`/products/${id}`);
   return data;
+}
+
+export async function getProductAttributes() {
+  const { data } = await wcFetch<WooGlobalAttribute[]>("/products/attributes", {
+    query: {
+      per_page: 100
+    }
+  });
+
+  return data;
+}
+
+export async function getProductAttributeTerms(attributeId: number) {
+  const cached = attributeTermCache.get(attributeId);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.terms;
+  }
+
+  const terms: WooAttributeTerm[] = [];
+  let page = 1;
+  let totalPages = 1;
+
+  do {
+    const result = await wcFetch<WooAttributeTerm[]>(
+      `/products/attributes/${attributeId}/terms`,
+      {
+        query: {
+          per_page: 100,
+          page
+        }
+      }
+    );
+
+    terms.push(...result.data);
+    totalPages = result.totalPages ?? 1;
+    page += 1;
+  } while (page <= totalPages);
+
+  const uniqueTerms = [...new Map(terms.map((term) => [term.id, term])).values()];
+  attributeTermCache.set(attributeId, {
+    expiresAt: Date.now() + 5 * 60 * 1000,
+    terms: uniqueTerms
+  });
+
+  return uniqueTerms;
+}
+
+export async function ensureProductAttributeTerms(attributeId: number, names: string[]) {
+  const terms = await getProductAttributeTerms(attributeId);
+  const knownNames = new Set(terms.map((term) => term.name.trim().toLowerCase()));
+  const uniqueNames = [...new Map(
+    names
+      .map((name) => name.trim())
+      .filter(Boolean)
+      .map((name) => [name.toLowerCase(), name])
+  ).values()];
+
+  for (const name of uniqueNames) {
+    if (knownNames.has(name.toLowerCase())) {
+      continue;
+    }
+
+    const { data } = await wcFetch<WooAttributeTerm>(
+      `/products/attributes/${attributeId}/terms`,
+      {
+        method: "POST",
+        body: { name }
+      }
+    );
+
+    terms.push(data);
+    knownNames.add(name.toLowerCase());
+  }
+
+  attributeTermCache.set(attributeId, {
+    expiresAt: Date.now() + 5 * 60 * 1000,
+    terms
+  });
 }
 
 export function productHasCustomNotes(product: { meta_data?: Array<{ key: string; value: unknown }> }) {

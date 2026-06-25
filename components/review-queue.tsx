@@ -183,6 +183,38 @@ function ProductMergeReviewSummary({ review }: { review: ReviewRecord }) {
   );
 }
 
+function MakeModelReviewSummary({ review }: { review: ReviewRecord }) {
+  if (!isRecord(review.before) || review.before.source !== "make_model_sheet") {
+    return null;
+  }
+
+  const current = isRecord(review.before.current) ? review.before.current : {};
+  const expected = isRecord(review.before.expected) ? review.before.expected : {};
+  const product = productSnapshot(review.before.product);
+  const currentMake = stringList(current.make);
+  const currentModel = stringList(current.model);
+  const expectedMake = stringList(expected.make);
+  const expectedModel = stringList(expected.model);
+
+  return (
+    <div className="review-make-model-summary">
+      {product ? <ReviewProductCard label="SKU-verified product" product={product} /> : null}
+      <div className="review-make-model-diffs">
+        <div>
+          <strong>Make</strong>
+          <span><b>Current:</b> {currentMake.join(", ") || "None"}</span>
+          <span><b>After approval:</b> {expectedMake.join(", ") || "None"}</span>
+        </div>
+        <div>
+          <strong>Model</strong>
+          <span><b>Current:</b> {currentModel.join(", ") || "None"}</span>
+          <span><b>After approval:</b> {expectedModel.join(", ") || "None"}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ReviewQueue({ reviews }: { reviews: ReviewRecord[] }) {
   const router = useRouter();
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -340,6 +372,7 @@ export default function ReviewQueue({ reviews }: { reviews: ReviewRecord[] }) {
             </div>
           </div>
           <ProductMergeReviewSummary review={review} />
+          <MakeModelReviewSummary review={review} />
           <details>
             <summary className="panel-body">View change payload</summary>
             <div className="panel-body">

@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { GitMerge, ShieldCheck } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, GitMerge, ShieldCheck } from "lucide-react";
 
 import {
   getCategoryLabel,
@@ -67,11 +67,22 @@ export default function CategoryMergeTool({ categories }: { categories: WooCateg
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
   const selectedGroupKey =
     selectedCategoryId === "all"
       ? null
       : normalizeCategoryName(categories.find((category) => category.id === selectedCategoryId)?.name ?? "");
   const visibleGroups = selectedGroupKey ? groups.filter((group) => group.key === selectedGroupKey) : groups;
+  const pageSize = 10;
+  const totalPages = selectedGroupKey ? 1 : Math.max(1, Math.ceil(visibleGroups.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pagedGroups = selectedGroupKey
+    ? visibleGroups
+    : visibleGroups.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [selectedCategoryId]);
 
   function hierarchyLabel(category: WooCategory) {
     return hierarchyById.get(category.id)?.path ?? getCategoryPath(categories, category.id);
@@ -124,18 +135,16 @@ export default function CategoryMergeTool({ categories }: { categories: WooCateg
   }
 
   return (
-    <section className="category-merge-section">
-      <div className="category-merge-head">
+    <section className="category-merge-section" id="category-duplicates">
+      <div className="category-section-head">
         <div>
-          <h2>Duplicate Category Compare</h2>
-          <p className="page-copy">
-            Compare parent and child categories before creating a merge review. The selected target
-            is kept; the duplicate is merged into it after approval.
-          </p>
+          <span className="category-step-label">Maintenance task</span>
+          <h2>Resolve duplicate category names</h2>
+          <p>Compare the full paths before choosing which category stays. Products and child categories move to the kept category after approval.</p>
         </div>
         <div className="category-merge-actions">
           <div className="field category-merge-select">
-            <label htmlFor="duplicate-category">Compare category</label>
+            <label htmlFor="duplicate-category">Find a duplicate group</label>
             <select
               id="duplicate-category"
               value={String(selectedCategoryId)}
@@ -159,11 +168,16 @@ export default function CategoryMergeTool({ categories }: { categories: WooCateg
         </div>
       </div>
 
+      <div className="category-merge-warning">
+        <AlertTriangle size={18} />
+        <span><strong>Names can match without being duplicates.</strong> Check the hierarchy, products, and child categories before creating a merge review.</span>
+      </div>
+
       {message ? <p className="notice">{message}</p> : null}
       {error ? <p className="error">{error}</p> : null}
 
       <div className="duplicate-groups">
-        {visibleGroups.map((group) => {
+        {pagedGroups.map((group) => {
           const targetId = targetByGroup[group.key] ?? defaultTargetId(group.categories);
 
           return (
@@ -171,10 +185,10 @@ export default function CategoryMergeTool({ categories }: { categories: WooCateg
               <div className="duplicate-card-head">
                 <div>
                   <h3>{group.name}</h3>
-                  <span className="subtle">{group.categories.length} matching categories</span>
+                  <span className="subtle">{group.categories.length} categories share this name</span>
                 </div>
                 <div className="field">
-                  <label htmlFor={`target-${group.key}`}>Keep target</label>
+                  <label htmlFor={`target-${group.key}`}>Category to keep</label>
                   <select
                     id={`target-${group.key}`}
                     value={targetId}
@@ -221,7 +235,7 @@ export default function CategoryMergeTool({ categories }: { categories: WooCateg
                       </div>
                       <div className="actions">
                         {isTarget ? (
-                          <span className="status approved">Target</span>
+                          <span className="status approved">Will be kept</span>
                         ) : (
                           <button
                             className="button secondary"
@@ -235,7 +249,7 @@ export default function CategoryMergeTool({ categories }: { categories: WooCateg
                             onClick={() => createMergeReview(group, category.id)}
                           >
                             <GitMerge size={17} />
-                            {busy ? "Creating" : "Merge Review"}
+                            {busy ? "Creating review" : "Merge into kept category"}
                           </button>
                         )}
                       </div>
@@ -247,6 +261,33 @@ export default function CategoryMergeTool({ categories }: { categories: WooCateg
           );
         })}
       </div>
+
+      {!selectedGroupKey && visibleGroups.length > pageSize ? (
+        <div className="category-merge-pagination">
+          <span>
+            Showing {(safePage - 1) * pageSize + 1}-{Math.min(safePage * pageSize, visibleGroups.length)} of {visibleGroups.length} duplicate names
+          </span>
+          <button
+            className="icon-button secondary"
+            type="button"
+            disabled={safePage <= 1}
+            onClick={() => setPage((current) => Math.max(1, current - 1))}
+            aria-label="Previous duplicate categories page"
+          >
+            <ChevronLeft size={17} />
+          </button>
+          <strong>{safePage} / {totalPages}</strong>
+          <button
+            className="icon-button secondary"
+            type="button"
+            disabled={safePage >= totalPages}
+            onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+            aria-label="Next duplicate categories page"
+          >
+            <ChevronRight size={17} />
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }
