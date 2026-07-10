@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getReview, isReviewStorageMissing, patchReview } from "@/lib/review-store";
+import { deleteReview, getReview, isReviewStorageMissing } from "@/lib/review-store";
 
 export async function POST(
   _request: Request,
@@ -24,10 +24,13 @@ export async function POST(
     return NextResponse.json({ error: "Approved reviews cannot be rejected." }, { status: 400 });
   }
 
-  const updated = await patchReview(id, {
+  const updated = {
+    ...review,
     status: "rejected",
-    reviewedAt: new Date().toISOString()
-  });
+    reviewedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
 
+  await deleteReview(id);
   return NextResponse.json(updated);
 }

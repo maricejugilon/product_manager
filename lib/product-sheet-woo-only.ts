@@ -69,12 +69,16 @@ export async function getWooOnlyProducts(options: { refresh?: boolean } = {}) {
   }
 
   const sheetRows = await getProductSheetRows();
-  const wooProducts = await getAllProducts({ fields: wooOnlyFields });
+  const wooProducts = await getAllProducts({ fields: wooOnlyFields, status: "publish" });
   const categories = await getCategories();
   const sheetSkus = new Set(sheetRows.map((row) => normalize(row.sku)).filter(Boolean));
   const sheetNames = new Set(sheetRows.map((row) => normalize(row.name)).filter(Boolean));
   const products = wooProducts
     .filter((product) => {
+      if (product.status !== "publish") {
+        return false;
+      }
+
       const skuMatch = Boolean(product.sku) && sheetSkus.has(normalize(product.sku));
       const nameMatch = Boolean(product.name) && sheetNames.has(normalize(product.name));
 

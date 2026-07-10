@@ -5,12 +5,14 @@ import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 
 import { runtimeStorageFile } from "@/lib/runtime-storage";
+import { compactReviewRecord } from "@/lib/sanitize";
 import type { ReviewRecord } from "@/lib/types";
 
 const reviewFile = runtimeStorageFile("reviews.json");
 const reviewIndexKey = "fcw-product-manager:reviews:index";
 const reviewKeyPrefix = "fcw-product-manager:reviews:";
 const reviewLockPrefix = "fcw-product-manager:review-lock:";
+const reviewReadBatchSize = 50;
 
 function envValue(...names: string[]) {
   for (const name of names) {
@@ -116,24 +118,103 @@ function parseReview(value: unknown) {
   return value as ReviewRecord;
 }
 
+function chunks<T>(items: T[], size: number) {
+  const grouped: T[][] = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    grouped.push(items.slice(index, index + size));
+  }
+
+  return grouped;
+}
+
+function isCompletedReview(review: ReviewRecord) {
+  return review.status === "approved" || review.status === "rejected";
+}
+
+function isMaxRequestSizeError(error: unknown) {
+  return error instanceof Error && error.message.toLowerCase().includes("max request size exceeded");
+}
+
 async function ensureStore() {
   await mkdir(path.dirname(reviewFile), { recursive: true });
 }
 
 export async function listReviews() {
   if (kvConfig()) {
-    const ids = await kvCommand<string[]>(["ZREVRANGE", reviewIndexKey, 0, -1]);
+    const reviews: ReviewRecord[] = [];
+    const staleIds: string[] = [];
+    let offset = 0;
 
-    if (!ids || ids.length === 0) {
-      return [];
+    while (true) {
+      const ids = await kvCommand<string[]>([
+        "ZREVRANGE",
+        reviewIndexKey,
+        offset,
+        offset + reviewReadBatchSize - 1
+      ]);
+
+      if (!ids || ids.length === 0) {
+        break;
+      }
+
+      for (const idChunk of chunks(ids, reviewReadBatchSize)) {
+        let values: unknown[];
+
+        try {
+          values = await kvCommand<unknown[]>(["MGET", ...idChunk.map(reviewKey)]);
+        } catch (error) {
+          if (!isMaxRequestSizeError(error)) {
+            throw error;
+          }
+
+          values = [];
+
+          for (const id of idChunk) {
+            try {
+              values.push(await kvCommand<unknown>(["GET", reviewKey(id)]));
+            } catch (innerError) {
+              if (!isMaxRequestSizeError(innerError)) {
+                throw innerError;
+              }
+
+              values.push(undefined);
+              staleIds.push(id);
+            }
+          }
+        }
+
+        values.forEach((value, index) => {
+          const review = parseReview(value);
+          const id = idChunk[index];
+
+          if (!review) {
+            staleIds.push(id);
+            return;
+          }
+
+          if (isCompletedReview(review)) {
+            staleIds.push(id);
+            return;
+          }
+
+          reviews.push(compactReviewRecord(review));
+        });
+      }
+
+      if (ids.length < reviewReadBatchSize) {
+        break;
+      }
+
+      offset += reviewReadBatchSize;
     }
 
-    const values = await kvCommand<unknown[]>(["MGET", ...ids.map(reviewKey)]);
+    for (const id of [...new Set(staleIds)]) {
+      await kvCommand<number>(["DEL", reviewKey(id)]);
+      await kvCommand<number>(["ZREM", reviewIndexKey, id]);
+    }
 
-    return values
-      .map(parseReview)
-      .filter((review): review is ReviewRecord => Boolean(review))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return reviews.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   if (isReviewStorageMissing()) {
@@ -143,7 +224,13 @@ export async function listReviews() {
   try {
     const raw = await readFile(reviewFile, "utf8");
     const reviews = JSON.parse(raw) as ReviewRecord[];
-    return reviews.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const activeReviews = reviews.filter((review) => !isCompletedReview(review)).map(compactReviewRecord);
+
+    if (activeReviews.length !== reviews.length) {
+      await writeReviews(activeReviews);
+    }
+
+    return activeReviews.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return [];
@@ -159,7 +246,7 @@ async function writeReviews(reviews: ReviewRecord[]) {
   }
 
   await ensureStore();
-  await writeFile(reviewFile, `${JSON.stringify(reviews, null, 2)}\n`, "utf8");
+  await writeFile(reviewFile, `${JSON.stringify(reviews.map(compactReviewRecord), null, 2)}\n`, "utf8");
 }
 
 export async function getReview(id: string) {
@@ -201,13 +288,13 @@ export async function createReview(
   input: Pick<ReviewRecord, "resource" | "action" | "resourceId" | "title" | "before" | "changes">
 ) {
   const now = new Date().toISOString();
-  const review: ReviewRecord = {
+  const review = compactReviewRecord({
     ...input,
     id: randomUUID(),
     status: "pending",
     createdAt: now,
     updatedAt: now
-  };
+  });
 
   if (kvConfig()) {
     await kvCommand<"OK">(["SET", reviewKey(review.id), JSON.stringify(review)]);
@@ -233,11 +320,11 @@ export async function patchReview(id: string, patch: Partial<ReviewRecord>) {
       return undefined;
     }
 
-    const updated: ReviewRecord = {
+    const updated = compactReviewRecord({
       ...review,
       ...patch,
       updatedAt: new Date().toISOString()
-    };
+    });
 
     await kvCommand<"OK">(["SET", reviewKey(id), JSON.stringify(updated)]);
     await kvCommand<number>(["ZADD", reviewIndexKey, Date.parse(updated.createdAt), id]);
@@ -255,13 +342,28 @@ export async function patchReview(id: string, patch: Partial<ReviewRecord>) {
     return undefined;
   }
 
-  const updated: ReviewRecord = {
+  const updated = compactReviewRecord({
     ...reviews[index],
     ...patch,
     updatedAt: new Date().toISOString()
-  };
+  });
 
   reviews[index] = updated;
   await writeReviews(reviews);
   return updated;
+}
+
+export async function deleteReview(id: string) {
+  if (kvConfig()) {
+    await kvCommand<number>(["DEL", reviewKey(id)]);
+    await kvCommand<number>(["ZREM", reviewIndexKey, id]);
+    return;
+  }
+
+  if (shouldRequireSharedStore()) {
+    throw sharedStoreError();
+  }
+
+  const reviews = await listReviews();
+  await writeReviews(reviews.filter((review) => review.id !== id));
 }

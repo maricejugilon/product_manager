@@ -313,6 +313,8 @@ export default function ProductSheetValidator() {
   const [wooOnlySearch, setWooOnlySearch] = useState("");
   const [archivingProduct, setArchivingProduct] = useState<number | null>(null);
   const [archiveReviews, setArchiveReviews] = useState<Set<number>>(() => new Set());
+  const [selectedWooOnlyIds, setSelectedWooOnlyIds] = useState<number[]>([]);
+  const [archiveProgress, setArchiveProgress] = useState<{ current: number; total: number } | null>(null);
 
   async function loadRows(mode: LoadMode, signal: AbortSignal) {
     const sync = mode === "sync";
@@ -476,6 +478,64 @@ export default function ProductSheetValidator() {
     }
   }
 
+  async function createArchiveReviews(products: WooOnlyProduct[]) {
+    const eligibleProducts = products.filter((product) => !archiveReviews.has(product.id));
+
+    if (eligibleProducts.length === 0) {
+      setWooOnlyError("Select at least one product that is not already for review.");
+      return;
+    }
+
+    setWooOnlyError("");
+    setMessage("");
+    setArchiveProgress({ current: 0, total: eligibleProducts.length });
+
+    let created = 0;
+
+    try {
+      for (const product of eligibleProducts) {
+        setArchivingProduct(product.id);
+
+        const response = await fetch("/api/reviews", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            resource: "product",
+            action: "update",
+            resourceId: product.id,
+            changes: {
+              status: "draft",
+              catalog_visibility: "hidden"
+            }
+          })
+        });
+        const payload = (await response.json()) as { error?: string };
+
+        if (!response.ok || payload.error) {
+          throw new Error(payload.error ?? `Could not create archive review for ${product.name}.`);
+        }
+
+        created += 1;
+        setArchiveReviews((current) => new Set(current).add(product.id));
+        setArchiveProgress({ current: created, total: eligibleProducts.length });
+      }
+
+      setSelectedWooOnlyIds((current) =>
+        current.filter((id) => !eligibleProducts.some((product) => product.id === id))
+      );
+      setMessage(
+        `Archive review${created === 1 ? "" : "s"} created for ${created} product${created === 1 ? "" : "s"}. Approve ${created === 1 ? "it" : "them"} in the Review Queue.`
+      );
+    } catch (caught) {
+      setWooOnlyError(caught instanceof Error ? caught.message : "Could not create archive reviews.");
+    } finally {
+      setArchivingProduct(null);
+      setArchiveProgress(null);
+    }
+  }
+
   useEffect(() => {
     if (viewFilter === "woo_only" && !wooOnlyLoaded && !wooOnlyLoading) {
       loadWooOnlyProducts();
@@ -579,6 +639,18 @@ export default function ProductSheetValidator() {
   const pageStart = (safeCurrentPage - 1) * pageSize;
   const pageResults = filteredResults.slice(pageStart, pageStart + pageSize);
   const pageWooOnlyProducts = filteredWooOnlyProducts.slice(pageStart, pageStart + pageSize);
+  const selectedWooOnlySet = useMemo(() => new Set(selectedWooOnlyIds), [selectedWooOnlyIds]);
+  const selectableWooOnlyProducts = useMemo(
+    () => pageWooOnlyProducts.filter((product) => !archiveReviews.has(product.id)),
+    [archiveReviews, pageWooOnlyProducts]
+  );
+  const selectedWooOnlyProducts = useMemo(
+    () => wooOnlyProducts.filter((product) => selectedWooOnlySet.has(product.id) && !archiveReviews.has(product.id)),
+    [archiveReviews, selectedWooOnlySet, wooOnlyProducts]
+  );
+  const allVisibleWooOnlySelected =
+    selectableWooOnlyProducts.length > 0 &&
+    selectableWooOnlyProducts.every((product) => selectedWooOnlySet.has(product.id));
 
   useEffect(() => {
     setCurrentPage(1);
@@ -587,6 +659,37 @@ export default function ProductSheetValidator() {
   useEffect(() => {
     setCurrentPage((page) => Math.min(page, Math.max(1, Math.ceil(filteredResults.length / pageSize))));
   }, [activeResultCount]);
+
+  useEffect(() => {
+    const availableIds = new Set(wooOnlyProducts.map((product) => product.id));
+    setSelectedWooOnlyIds((current) => current.filter((id) => availableIds.has(id) && !archiveReviews.has(id)));
+  }, [archiveReviews, wooOnlyProducts]);
+
+  function toggleWooOnlyProduct(id: number) {
+    setSelectedWooOnlyIds((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
+    );
+  }
+
+  function toggleAllVisibleWooOnlyProducts() {
+    const visibleIds = selectableWooOnlyProducts.map((product) => product.id);
+
+    setSelectedWooOnlyIds((current) => {
+      const selected = new Set(current);
+
+      if (visibleIds.every((id) => selected.has(id))) {
+        for (const id of visibleIds) {
+          selected.delete(id);
+        }
+      } else {
+        for (const id of visibleIds) {
+          selected.add(id);
+        }
+      }
+
+      return [...selected];
+    });
+  }
 
   async function createProductReview(rowNumber: number) {
     setCreatingRow(rowNumber);
@@ -864,10 +967,41 @@ export default function ProductSheetValidator() {
                   <RefreshCw size={16} />
                   {wooOnlyLoading ? "Checking" : "Refresh list"}
                 </button>
+                <span className="product-sheet-woo-selected-count">
+                  {selectedWooOnlyProducts.length} selected
+                </span>
+                <div className="product-sheet-woo-archive-actions">
+                  {selectedWooOnlyProducts.length > 0 ? (
+                    <button
+                      className="button secondary compact-button"
+                      type="button"
+                      disabled={archivingProduct !== null}
+                      onClick={() => setSelectedWooOnlyIds([])}
+                    >
+                      Clear selection
+                    </button>
+                  ) : null}
+                  <button
+                    className="button"
+                    type="button"
+                    disabled={selectedWooOnlyProducts.length === 0 || archivingProduct !== null}
+                    onClick={() => createArchiveReviews(selectedWooOnlyProducts)}
+                  >
+                    <Archive size={16} />
+                    {archivingProduct !== null && archiveProgress ? "Creating reviews" : "Archive selected"}
+                  </button>
+                </div>
               </div>
 
               {wooOnlyLoading ? (
                 <ProgressBar label="Comparing all WooCommerce products with the Google Sheet" current={0} total={1} />
+              ) : null}
+              {archiveProgress ? (
+                <ProgressBar
+                  label="Creating archive reviews"
+                  current={archiveProgress.current}
+                  total={archiveProgress.total}
+                />
               ) : null}
               {wooOnlyError ? <p className="error">{wooOnlyError}</p> : null}
               {!wooOnlyLoading && !wooOnlyError && pageWooOnlyProducts.length === 0 ? (
@@ -883,6 +1017,15 @@ export default function ProductSheetValidator() {
                   <table>
                     <thead>
                       <tr>
+                        <th className="select-col">
+                          <input
+                            aria-label="Select all visible Woo only products"
+                            checked={allVisibleWooOnlySelected}
+                            disabled={selectableWooOnlyProducts.length === 0 || archivingProduct !== null}
+                            type="checkbox"
+                            onChange={toggleAllVisibleWooOnlyProducts}
+                          />
+                        </th>
                         <th>Product</th>
                         <th>SKU</th>
                         <th>Category hierarchy</th>
@@ -893,7 +1036,16 @@ export default function ProductSheetValidator() {
                     </thead>
                     <tbody>
                       {pageWooOnlyProducts.map((product) => (
-                        <tr key={product.id}>
+                        <tr key={product.id} className={selectedWooOnlySet.has(product.id) ? "selected-row" : undefined}>
+                          <td className="select-col">
+                            <input
+                              aria-label={`Select ${product.name}`}
+                              checked={selectedWooOnlySet.has(product.id)}
+                              disabled={archiveReviews.has(product.id) || archivingProduct !== null}
+                              type="checkbox"
+                              onChange={() => toggleWooOnlyProduct(product.id)}
+                            />
+                          </td>
                           <td>
                             <div className="product-sheet-woo-product">
                               {product.image ? <img src={product.image} alt="" /> : <span aria-hidden />}
@@ -918,37 +1070,39 @@ export default function ProductSheetValidator() {
                             <span className="subtle">{formatCacheDate(product.dateModified || null)}</span>
                           </td>
                           <td>
-                            <Link className="button secondary compact-button" href={`/products/${product.id}`}>
-                              Manage
-                            </Link>
-                            {product.status === "draft" && product.catalogVisibility === "hidden" ? (
-                              <span className="status neutral product-sheet-archive-status">Archived</span>
-                            ) : (
-                              <button
-                                className="button secondary compact-button product-sheet-archive-button"
-                                type="button"
-                                disabled={archivingProduct !== null || archiveReviews.has(product.id)}
-                                onClick={() => createArchiveReview(product)}
-                                title="Create a review to make this product draft and hide it from the catalog"
-                              >
-                                <Archive size={14} />
-                                {archivingProduct === product.id
-                                  ? "Creating"
-                                  : archiveReviews.has(product.id)
-                                    ? "For review"
-                                    : "Archive"}
-                              </button>
-                            )}
-                            {product.permalink ? (
-                              <a
-                                className="subtle product-sheet-woo-store-link"
-                                href={product.permalink}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                View in store
-                              </a>
-                            ) : null}
+                            <div className="product-sheet-woo-actions">
+                              <Link className="button secondary compact-button" href={`/products/${product.id}`}>
+                                Manage
+                              </Link>
+                              {product.status === "draft" && product.catalogVisibility === "hidden" ? (
+                                <span className="status neutral product-sheet-archive-status">Archived</span>
+                              ) : (
+                                <button
+                                  className="button secondary compact-button product-sheet-archive-button"
+                                  type="button"
+                                  disabled={archivingProduct !== null || archiveReviews.has(product.id)}
+                                  onClick={() => createArchiveReview(product)}
+                                  title="Create a review to make this product draft and hide it from the catalog"
+                                >
+                                  <Archive size={14} />
+                                  {archivingProduct === product.id
+                                    ? "Creating"
+                                    : archiveReviews.has(product.id)
+                                      ? "For review"
+                                      : "Archive"}
+                                </button>
+                              )}
+                              {product.permalink ? (
+                                <a
+                                  className="subtle product-sheet-woo-store-link"
+                                  href={product.permalink}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  View in store
+                                </a>
+                              ) : null}
+                            </div>
                           </td>
                         </tr>
                       ))}

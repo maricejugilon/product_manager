@@ -1,7 +1,7 @@
 import "server-only";
 
 import { resolveColourBoardImagesInChanges } from "@/lib/colour-board-media";
-import { listReviews, patchReview } from "@/lib/review-store";
+import { deleteReview, listReviews, patchReview } from "@/lib/review-store";
 import type { CategoryChanges, CategoryMergeChanges, ProductChanges, ProductMergeChanges, ReviewRecord } from "@/lib/types";
 import {
   createCategory,
@@ -104,19 +104,17 @@ async function publishReview(review: ReviewRecord) {
 
 export async function approveReview(review: ReviewRecord) {
   try {
-    const result = await publishReview(review);
-    const updated = await patchReview(review.id, {
+    await publishReview(review);
+    const completed: ReviewRecord = {
+      ...review,
       status: "approved",
-      result,
       error: undefined,
-      reviewedAt: new Date().toISOString()
-    });
+      reviewedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
 
-    if (!updated) {
-      throw new Error("Review not found after publishing.");
-    }
-
-    return updated;
+    await deleteReview(review.id);
+    return completed;
   } catch (error) {
     const message = error instanceof Error ? error.message : "WooCommerce update failed.";
     const updated = await patchReview(review.id, {

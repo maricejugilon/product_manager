@@ -1,4 +1,4 @@
-import type { CategoryChanges, ProductChanges } from "@/lib/types";
+import type { CategoryChanges, ProductChanges, ReviewRecord } from "@/lib/types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -165,4 +165,99 @@ export function compactCategoryChanges(input: unknown): CategoryChanges {
   }
 
   return changes;
+}
+
+export function compactProductSnapshot(input: unknown) {
+  if (!isRecord(input)) {
+    return input;
+  }
+
+  const id = asNumber(input.id);
+
+  if (id === undefined) {
+    return input;
+  }
+
+  const snapshot: Record<string, unknown> = {
+    id,
+    name: asString(input.name) ?? "",
+    sku: asString(input.sku) ?? "",
+    permalink: asString(input.permalink) ?? "",
+    status: asString(input.status) ?? "",
+    catalog_visibility: asString(input.catalog_visibility) ?? "",
+    type: asString(input.type) ?? "",
+    regular_price: asString(input.regular_price) ?? "",
+    sale_price: asString(input.sale_price) ?? "",
+    price: asString(input.price) ?? "",
+    stock_status: asString(input.stock_status) ?? "",
+    manage_stock: asBoolean(input.manage_stock) ?? false,
+    stock_quantity: input.stock_quantity === null ? null : asNumber(input.stock_quantity),
+    date_modified: asString(input.date_modified) ?? ""
+  };
+
+  if (Array.isArray(input.categories)) {
+    snapshot.categories = input.categories
+      .filter(isRecord)
+      .map((category) => ({
+        id: asNumber(category.id),
+        name: asString(category.name),
+        slug: asString(category.slug)
+      }))
+      .filter((category) => category.id !== undefined || category.name);
+  }
+
+  if (Array.isArray(input.images)) {
+    snapshot.images = input.images
+      .filter(isRecord)
+      .slice(0, 1)
+      .map((image) => ({
+        id: asNumber(image.id),
+        src: asString(image.src) ?? "",
+        alt: asString(image.alt) ?? ""
+      }))
+      .filter((image) => image.id !== undefined || image.src);
+  }
+
+  if (isRecord(input.dimensions)) {
+    snapshot.dimensions = {
+      length: asString(input.dimensions.length) ?? "",
+      width: asString(input.dimensions.width) ?? "",
+      height: asString(input.dimensions.height) ?? ""
+    };
+  }
+
+  return snapshot;
+}
+
+export function compactReviewBefore(resource: string, action: string, input: unknown) {
+  if (resource === "product" && action === "update") {
+    if (isRecord(input) && input.id === undefined) {
+      return {
+        ...input,
+        product: compactProductSnapshot(input.product)
+      };
+    }
+
+    return compactProductSnapshot(input);
+  }
+
+  if (resource === "product_merge" && isRecord(input)) {
+    return {
+      ...input,
+      source: compactProductSnapshot(input.source),
+      target: compactProductSnapshot(input.target)
+    };
+  }
+
+  return input;
+}
+
+export function compactReviewRecord(review: ReviewRecord): ReviewRecord {
+  return {
+    ...review,
+    before: compactReviewBefore(review.resource, review.action, review.before),
+    result: review.resource === "product" && review.result !== undefined
+      ? compactProductSnapshot(review.result)
+      : review.result
+  };
 }
