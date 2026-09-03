@@ -6,9 +6,14 @@ import { getProduct } from "@/lib/woocommerce";
 
 type BulkStockMode = "add" | "set";
 type BulkStockStatus = "keep" | WooProduct["stock_status"];
+type BulkBackorders = "keep" | WooProduct["backorders"];
 
 function isBulkStockStatus(value: unknown): value is BulkStockStatus {
   return value === "keep" || value === "instock" || value === "outofstock" || value === "onbackorder";
+}
+
+function isBulkBackorders(value: unknown): value is BulkBackorders {
+  return value === "keep" || value === "no" || value === "notify" || value === "yes";
 }
 
 function isBulkStockMode(value: unknown): value is BulkStockMode {
@@ -55,10 +60,11 @@ export async function POST(request: Request) {
     const productIds = uniqueProductIds(body.productIds);
     const mode = isBulkStockMode(body.mode) ? body.mode : "add";
     const stockStatus = isBulkStockStatus(body.stockStatus) ? body.stockStatus : "keep";
+    const backorders = isBulkBackorders(body.backorders) ? body.backorders : "keep";
     const quantity = parseQuantity(body.quantity);
     const manageStock = Boolean(body.manageStock);
 
-    if (quantity === undefined && stockStatus === "keep" && !manageStock) {
+    if (quantity === undefined && stockStatus === "keep" && backorders === "keep" && !manageStock) {
       return NextResponse.json({ error: "No stock changes were submitted." }, { status: 400 });
     }
 
@@ -78,8 +84,15 @@ export async function POST(request: Request) {
         }
       }
 
-      if (stockStatus !== "keep" && stockStatus !== product.stock_status) {
-        changes.stock_status = stockStatus;
+      const effectiveStockStatus = stockStatus === "onbackorder" ? "onbackorder" : stockStatus;
+      const effectiveBackorders = effectiveStockStatus === "onbackorder" ? "notify" : backorders;
+
+      if (effectiveStockStatus !== "keep" && effectiveStockStatus !== product.stock_status) {
+        changes.stock_status = effectiveStockStatus;
+      }
+
+      if (effectiveBackorders !== "keep" && effectiveBackorders !== product.backorders) {
+        changes.backorders = effectiveBackorders;
       }
 
       if (manageStock && !product.manage_stock) {

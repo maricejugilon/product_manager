@@ -95,9 +95,10 @@ export default function ProductBulkTable({
     const form = new FormData(event.currentTarget);
     const quantityRaw = String(form.get("quantity") ?? "").trim();
     const status = String(form.get("stock_status") ?? "keep");
+    const backorders = String(form.get("backorders") ?? "keep");
     const manageStock = form.get("manage_stock") === "on";
 
-    if (!quantityRaw && status === "keep" && !manageStock) {
+    if (!quantityRaw && status === "keep" && backorders === "keep" && !manageStock) {
       setError("Choose a stock quantity, stock status, or stock tracking change.");
       return;
     }
@@ -120,6 +121,7 @@ export default function ProductBulkTable({
             mode: form.get("mode"),
             quantity: quantityRaw || null,
             stockStatus: status,
+            backorders,
             manageStock
           })
         });
@@ -426,11 +428,43 @@ export default function ProductBulkTable({
               </div>
               <div className="field">
                 <label htmlFor="bulk-stock-status">Availability</label>
-                <select id="bulk-stock-status" name="stock_status" defaultValue="keep">
+                <select
+                  id="bulk-stock-status"
+                  name="stock_status"
+                  defaultValue="keep"
+                  onChange={(event) => {
+                    const stockStatus = event.currentTarget.value;
+                    const backordersField = document.getElementById("bulk-backorders");
+
+                    if (stockStatus === "onbackorder" && backordersField instanceof HTMLSelectElement) {
+                      backordersField.value = "notify";
+                    }
+                  }}
+                >
                   <option value="keep">Keep current availability</option>
                   <option value="instock">In stock</option>
                   <option value="outofstock">Out of stock</option>
                   <option value="onbackorder">On backorder</option>
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="bulk-backorders">Backorders</label>
+                <select
+                  id="bulk-backorders"
+                  name="backorders"
+                  defaultValue="notify"
+                  onChange={(event) => {
+                    const backorders = event.currentTarget.value;
+                    const stockStatusField = document.getElementById("bulk-stock-status");
+
+                    if (backorders === "notify" && stockStatusField instanceof HTMLSelectElement) {
+                      stockStatusField.value = "onbackorder";
+                    }
+                  }}
+                >
+                  <option value="no">Do not allow</option>
+                  <option value="notify">Allow and notify customer</option>
+                  <option value="yes">Allow</option>
                 </select>
               </div>
               <label className="checkbox-field compact">

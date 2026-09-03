@@ -1285,6 +1285,20 @@ export default function ProductEditor({
       .filter((option): option is (typeof categoryOptions)[number] => Boolean(option)),
     [categoryIds, categoryOptions]
   );
+
+  useEffect(() => {
+    const stockStatusField = document.getElementById("stock_status");
+    const backordersField = document.getElementById("backorders");
+
+    if (!(stockStatusField instanceof HTMLSelectElement) || !(backordersField instanceof HTMLSelectElement)) {
+      return;
+    }
+
+    if (stockStatusField.value === "onbackorder" && backordersField.value !== "notify") {
+      backordersField.value = "notify";
+    }
+  }, [product.stock_status, product.backorders]);
+
   const visibleCategoryOptions = useMemo(() => {
     const query = categorySearch.trim().toLowerCase();
 
@@ -1334,6 +1348,10 @@ export default function ProductEditor({
 
     if (nextBackorders !== currentBackorders) {
       changes.backorders = nextBackorders;
+    }
+
+    if (stockStatus === "onbackorder" && form.get("backorders") !== "notify") {
+      changes.backorders = "notify";
     }
 
     const manageStock = form.get("manage_stock") === "on";
@@ -1494,7 +1512,19 @@ export default function ProductEditor({
             </div>
             <div className="field">
               <label htmlFor="stock_status">Stock status</label>
-              <select id="stock_status" name="stock_status" defaultValue={product.stock_status}>
+              <select
+                id="stock_status"
+                name="stock_status"
+                defaultValue={product.stock_status}
+                onChange={(event) => {
+                  const stockStatus = event.currentTarget.value;
+                  const backordersField = document.getElementById("backorders");
+
+                  if (stockStatus === "onbackorder" && backordersField instanceof HTMLSelectElement) {
+                    backordersField.value = "notify";
+                  }
+                }}
+              >
                 <option value="instock">In stock</option>
                 <option value="outofstock">Out of stock</option>
                 <option value="onbackorder">On backorder</option>
@@ -1502,7 +1532,19 @@ export default function ProductEditor({
             </div>
             <div className="field">
               <label htmlFor="backorders">Backorders</label>
-              <select id="backorders" name="backorders" defaultValue={product.backorders ?? "no"}>
+              <select
+                id="backorders"
+                name="backorders"
+                defaultValue={product.backorders ?? "no"}
+                onChange={(event) => {
+                  const backorders = event.currentTarget.value;
+                  const stockStatusField = document.getElementById("stock_status");
+
+                  if (backorders === "notify" && stockStatusField instanceof HTMLSelectElement) {
+                    stockStatusField.value = "onbackorder";
+                  }
+                }}
+              >
                 <option value="no">Do not allow</option>
                 <option value="notify">Allow and notify customer</option>
                 <option value="yes">Allow</option>
