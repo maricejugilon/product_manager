@@ -35,6 +35,10 @@ function isValidDimension(value: string) {
   return Number.isFinite(parsed) && parsed >= 0;
 }
 
+function backordersValue(value: FormDataEntryValue | null) {
+  return value === "yes" || value === "notify" || value === "no" ? value : "no";
+}
+
 function dimensionsText(product: WooProduct) {
   const dimensions = product.dimensions ?? {};
   const values = [dimensions.length, dimensions.width, dimensions.height].map((value) => value?.trim() ?? "");
@@ -1324,6 +1328,14 @@ export default function ProductEditor({
       }
     }
 
+    const stockStatus = String(form.get("stock_status") ?? product.stock_status);
+    const currentBackorders = product.backorders ?? "no";
+    const nextBackorders = stockStatus === "onbackorder" ? "notify" : backordersValue(form.get("backorders"));
+
+    if (nextBackorders !== currentBackorders) {
+      changes.backorders = nextBackorders;
+    }
+
     const manageStock = form.get("manage_stock") === "on";
     if (manageStock !== product.manage_stock) {
       changes.manage_stock = manageStock;
@@ -1486,6 +1498,14 @@ export default function ProductEditor({
                 <option value="instock">In stock</option>
                 <option value="outofstock">Out of stock</option>
                 <option value="onbackorder">On backorder</option>
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="backorders">Backorders</label>
+              <select id="backorders" name="backorders" defaultValue={product.backorders ?? "no"}>
+                <option value="no">Do not allow</option>
+                <option value="notify">Allow and notify customer</option>
+                <option value="yes">Allow</option>
               </select>
             </div>
             <div className="field">
