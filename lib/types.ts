@@ -67,6 +67,9 @@ export type WooProduct = {
   regular_price: string;
   sale_price: string;
   stock_status: "instock" | "outofstock" | "onbackorder";
+  backorders?: "no" | "notify" | "yes";
+  backorders_allowed?: boolean;
+  backordered?: boolean;
   manage_stock: boolean;
   stock_quantity: number | null;
   categories: WooProductCategory[];
@@ -100,6 +103,7 @@ export type ProductChanges = Partial<{
   manage_stock: boolean;
   stock_quantity: number | null;
   stock_status: "instock" | "outofstock" | "onbackorder";
+  backorders: "no" | "notify" | "yes";
   categories: Array<{ id: number }>;
   cross_sell_ids: number[];
   images: Array<{ id?: number; src?: string; alt?: string }>;
@@ -120,6 +124,7 @@ export type ProductVariationChanges = Partial<{
   regular_price: string;
   sale_price: string;
   stock_status: "instock" | "outofstock" | "onbackorder";
+  backorders: "no" | "notify" | "yes";
   manage_stock: boolean;
   stock_quantity: number | null;
   description: string;
