@@ -80,6 +80,10 @@ export function compactProductChanges(input: unknown): ProductChanges {
     changes.stock_status = input.stock_status;
   }
 
+  if (input.backorders === "no" || input.backorders === "notify" || input.backorders === "yes") {
+    changes.backorders = input.backorders;
+  }
+
   if (Array.isArray(input.categories)) {
     changes.categories = input.categories
       .map((category) => (isRecord(category) ? asNumber(category.id) : asNumber(category)))
@@ -190,6 +194,9 @@ export function compactProductSnapshot(input: unknown) {
     sale_price: asString(input.sale_price) ?? "",
     price: asString(input.price) ?? "",
     stock_status: asString(input.stock_status) ?? "",
+    backorders: asString(input.backorders) ?? "",
+    backorders_allowed: asBoolean(input.backorders_allowed),
+    backordered: asBoolean(input.backordered),
     manage_stock: asBoolean(input.manage_stock) ?? false,
     stock_quantity: input.stock_quantity === null ? null : asNumber(input.stock_quantity),
     date_modified: asString(input.date_modified) ?? ""
