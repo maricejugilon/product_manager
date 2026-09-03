@@ -11,6 +11,7 @@ type PaginationControlsProps = {
   perPage: number;
   search: string;
   category: string;
+  status: string;
   stockStatus: string;
   customNotes: string;
   dimensions: string;
@@ -35,6 +36,7 @@ export default function PaginationControls({
   perPage,
   search,
   category,
+  status,
   stockStatus,
   customNotes,
   dimensions
@@ -55,6 +57,10 @@ export default function PaginationControls({
 
     if (category) {
       params.set("category", category);
+    }
+
+    if (status) {
+      params.set("status", status);
     }
 
     if (stockStatus) {

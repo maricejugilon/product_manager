@@ -37,6 +37,10 @@ function dimensionsFilter(value: string | undefined) {
   return value === "missing" || value === "complete" ? value : "";
 }
 
+function statusFilter(value: string | undefined) {
+  return value === "publish" || value === "draft" ? value : "";
+}
+
 function isActionableReview(review: ReviewRecord) {
   return review.status === "pending" || review.status === "failed";
 }
@@ -65,10 +69,12 @@ export default async function Dashboard({
   const search = first(params.search) ?? "";
   const category = first(params.category) ?? "";
   const stockStatus = first(params.stock_status) ?? "";
+  const status = statusFilter(first(params.status));
+  const effectiveStatus = status || "publish";
   const customNotes = customNotesFilter(first(params.custom_notes));
   const dimensions = dimensionsFilter(first(params.dimensions));
   const [productResult, categories, reviews] = await Promise.all([
-    getProductsByCustomNotes({ page, perPage, search, category, stockStatus, customNotes, dimensions }),
+    getProductsByCustomNotes({ page, perPage, search, category, stockStatus, status: effectiveStatus, customNotes, dimensions }),
     getCategories(),
     listReviews()
   ]);
@@ -97,7 +103,15 @@ export default async function Dashboard({
     reviewCount: productReviewCounts.get(product.id) ?? 0,
     dimensions: product.dimensions ?? {}
   }));
-  const hasFilters = Boolean(search || category || stockStatus || customNotes || dimensions || perPage !== 100);
+  const hasFilters = Boolean(
+    search ||
+    category ||
+    stockStatus ||
+    customNotes ||
+    dimensions ||
+    status !== undefined && status !== "publish" ||
+    perPage !== 100
+  );
 
   return (
     <main className="page">
@@ -206,6 +220,14 @@ export default async function Dashboard({
             </select>
           </div>
           <div className="field">
+            <label htmlFor="status">Product status</label>
+            <select id="status" name="status" defaultValue={effectiveStatus}>
+              <option value="">All statuses</option>
+              <option value="publish">Published</option>
+              <option value="draft">Draft</option>
+            </select>
+          </div>
+          <div className="field">
             <label htmlFor="custom_notes">Custom notes</label>
             <select id="custom_notes" name="custom_notes" defaultValue={customNotes}>
               <option value="">On or off</option>
@@ -242,6 +264,7 @@ export default async function Dashboard({
         currentPage={page}
         perPage={perPage}
         search={search}
+        status={status || "publish"}
         stockStatus={stockStatus}
         customNotes={customNotes}
         dimensions={dimensions}
