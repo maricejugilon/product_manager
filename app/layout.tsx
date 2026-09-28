@@ -23,6 +23,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <PackageSearch size={17} />
               Products
             </Link>
+            <Link href="/updated-list">
+              <FileSpreadsheet size={17} />
+              Updated List
+            </Link>
             <Link href="/categories">
               <Layers3 size={17} />
               Categories

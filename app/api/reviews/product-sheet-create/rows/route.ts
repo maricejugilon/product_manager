@@ -1,19 +1,34 @@
 import { NextResponse } from "next/server";
 
+import { parseProductSheetSource } from "@/lib/product-sheet";
 import { listReviews } from "@/lib/review-store";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const sheetSource = parseProductSheetSource(new URL(request.url).searchParams.get("source"));
   const reviews = await listReviews();
   const rowNumbers = reviews
     .filter(
-      (review) =>
-        review.resource === "product" &&
-        review.action === "create" &&
-        (review.status === "pending" || review.status === "failed")
+      (review) => {
+        const before = isRecord(review.before) ? review.before : {};
+
+        if (
+          review.resource !== "product" ||
+          (review.status !== "pending" && review.status !== "failed") ||
+          (before.sheetSource ?? "product-manager") !== sheetSource
+        ) {
+          return false;
+        }
+
+        if (review.action === "create") {
+          return true;
+        }
+
+        return review.action === "update" && before.source === "product_sheet_validator_publish";
+      }
     )
     .map((review) => {
       const before = isRecord(review.before) ? review.before : {};
@@ -36,7 +51,10 @@ export async function GET() {
 
     const before = isRecord(review.before) ? review.before : {};
 
-    if (before.source !== "product_sheet_validator_fix") {
+    if (
+      before.source !== "product_sheet_validator_fix" ||
+      (before.sheetSource ?? "product-manager") !== sheetSource
+    ) {
       continue;
     }
 

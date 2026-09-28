@@ -1,6 +1,7 @@
 import "server-only";
 
 import { parseCsv } from "@/lib/csv";
+import { friendlyNetworkError } from "@/lib/network-errors";
 
 export type SheetCategoryHierarchy = {
   parent: string;
@@ -20,9 +21,24 @@ export type SheetProductRow = {
   categoryHierarchy: SheetCategoryHierarchy[];
 };
 
-const spreadsheetId = "1KbsqFWTBddlzkttsYodaO6fTQkQSccci4YESxgW_N08";
-const sheetName = "Product List";
-const gid = "1647381397";
+export type ProductSheetSource = "product-manager" | "updated-list";
+
+type SheetConfig = {
+  spreadsheetId: string;
+  sheetName: string;
+  gid?: string;
+};
+
+const defaultSheetConfig: SheetConfig = {
+  spreadsheetId: "1KbsqFWTBddlzkttsYodaO6fTQkQSccci4YESxgW_N08",
+  sheetName: "Product List",
+  gid: "1647381397"
+};
+
+const updatedListSheetConfig: SheetConfig = {
+  spreadsheetId: "1fWu2mxc0LWDUtd_YZQColdkQxwcbsXuihCZ-HcAvlPA",
+  sheetName: "Product list"
+};
 
 function normalizeHeader(value: string) {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
@@ -30,16 +46,18 @@ function normalizeHeader(value: string) {
 
 function getValue(values: Record<string, string>, aliases: string[]) {
   const normalizedAliases = new Set(aliases.map(normalizeHeader));
-  const match = Object.entries(values).find(([key]) => normalizedAliases.has(normalizeHeader(key)));
+  const match = Object.entries(values).find(
+    ([key, value]) => normalizedAliases.has(normalizeHeader(key)) && value.trim()
+  );
 
   return match?.[1]?.trim() ?? "";
 }
 
 function findValue(values: Record<string, string>, includes: string[]) {
-  const match = Object.entries(values).find(([key]) => {
+  const match = Object.entries(values).find(([key, value]) => {
     const normalized = normalizeHeader(key);
 
-    return includes.every((item) => normalized.includes(item));
+    return value.trim() && includes.every((item) => normalized.includes(item));
   });
 
   return match?.[1]?.trim() ?? "";
@@ -80,11 +98,31 @@ function normalizeLiveUrl(value: string) {
   return `https://www.flightcasewarehouse.co.uk/type/product.asp?item=${encodeURIComponent(trimmed)}`;
 }
 
+function sheetSku(value: string) {
+  return value.trim().replace(/\s+\([^)]*\)\s*$/, "").trim();
+}
+
 function parseCategoryCell(value: string) {
   return value
     .split(/[,;|\n]+/g)
     .map((item) => item.replace(/\s+/g, " ").trim())
     .filter(Boolean);
+}
+
+function categoryCellValue(values: Record<string, string>, aliases: string[]) {
+  for (const alias of aliases) {
+    const normalizedAlias = normalizeHeader(alias);
+    const match = Object.entries(values).find(
+      ([key, value]) => normalizeHeader(key) === normalizedAlias && value.trim()
+    );
+    const value = match?.[1]?.trim() ?? "";
+
+    if (value && !/^https?:\/\//i.test(value)) {
+      return value;
+    }
+  }
+
+  return "";
 }
 
 function valueAt(values: string[], index: number) {
@@ -96,15 +134,30 @@ function valueAt(values: string[], index: number) {
 }
 
 function categoryHierarchyFromValues(values: Record<string, string>) {
-  const parentText =
-    getValue(values, ["categories", "category", "product categories", "product category"]) ||
-    findValue(values, ["categor"]);
-  const subCategoryText =
-    getValue(values, ["sub categories", "sub category", "subcategory", "sub-category"]) ||
-    findValue(values, ["sub", "categor"]);
-  const grandChildText =
-    getValue(values, ["grand child categories", "grand child category", "grandchild categories", "grandchild category"]) ||
-    findValue(values, ["grand", "categor"]);
+  const parentText = categoryCellValue(values, [
+    "column 1",
+    "main category",
+    "parent category",
+    "category level 1",
+    "categories",
+    "category",
+    "product categories",
+    "product category"
+  ]);
+  const subCategoryText = categoryCellValue(values, [
+    "sub categories",
+    "sub category",
+    "subcategory",
+    "sub-category",
+    "category level 2"
+  ]);
+  const grandChildText = categoryCellValue(values, [
+    "grand child categories",
+    "grand child category",
+    "grandchild categories",
+    "grandchild category",
+    "category level 3"
+  ]);
   const parents = parseCategoryCell(parentText);
   const subCategories = parseCategoryCell(subCategoryText);
   const grandChildCategories = parseCategoryCell(grandChildText);
@@ -127,18 +180,36 @@ function categoryHierarchyFromValues(values: Record<string, string>) {
 }
 
 function rowFromValues(rowNumber: number, values: Record<string, string>): SheetProductRow {
-  const sku =
-    getValue(values, ["sku", "product sku", "item sku", "stock keeping unit"]) ||
-    findValue(values, ["sku"]);
+  const sku = sheetSku(
+    getValue(values, ["sku", "product sku", "item sku", "stock keeping unit", "product code"]) ||
+      findValue(values, ["sku"])
+  );
   const name =
     getValue(values, ["name", "product name", "title", "product title"]) ||
     findValue(values, ["product", "name"]) ||
     findValue(values, ["title"]);
-  const categoryText =
-    getValue(values, ["categories", "category", "product categories", "product category"]) ||
-    findValue(values, ["categor"]);
+  const categoryText = categoryCellValue(values, [
+    "column 1",
+    "main category",
+    "parent category",
+    "categories",
+    "category",
+    "product categories",
+    "product category"
+  ]);
   const liveUrl =
-    getValue(values, ["live url", "live link", "product url", "url", "link"]) ||
+    getValue(values, [
+      "product -link",
+      "product-link",
+      "product link",
+      "product link/external link",
+      "live url",
+      "live link",
+      "product url",
+      "external url",
+      "url",
+      "link"
+    ]) ||
     findValue(values, ["live", "url"]) ||
     findValue(values, ["url"]);
   const categoryHierarchy = categoryHierarchyFromValues(values);
@@ -157,15 +228,26 @@ function rowFromValues(rowNumber: number, values: Record<string, string>): Sheet
   };
 }
 
-async function fetchPublicCsv() {
-  const url = new URL(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq`);
+async function fetchPublicCsv(config: SheetConfig = defaultSheetConfig) {
+  const url = new URL(`https://docs.google.com/spreadsheets/d/${config.spreadsheetId}/gviz/tq`);
   url.searchParams.set("tqx", "out:csv");
-  url.searchParams.set("sheet", sheetName);
-  url.searchParams.set("gid", gid);
+  url.searchParams.set("sheet", config.sheetName);
+  url.searchParams.set("_ts", Date.now().toString());
 
-  const response = await fetch(url, {
-    cache: "no-store"
-  });
+  if (config.gid) {
+    url.searchParams.set("gid", config.gid);
+  }
+
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(30000)
+    });
+  } catch (error) {
+    throw friendlyNetworkError(error, "Google Sheets");
+  }
   const body = await response.text();
 
   if (!response.ok) {
@@ -179,8 +261,8 @@ async function fetchPublicCsv() {
   return body;
 }
 
-export async function getProductSheetRows() {
-  const csv = await fetchPublicCsv();
+export async function getProductSheetRows(config: SheetConfig = defaultSheetConfig) {
+  const csv = await fetchPublicCsv(config);
   const rows = parseCsv(csv);
   const [headers = [], ...dataRows] = rows;
   const cleanHeaders = headers.map((header, index) => header.trim() || `Column ${index + 1}`);
@@ -192,6 +274,22 @@ export async function getProductSheetRows() {
   });
 }
 
-export async function getProductSheetRow(rowNumber: number) {
-  return (await getProductSheetRows()).find((row) => row.rowNumber === rowNumber);
+export async function getProductSheetRow(rowNumber: number, config: SheetConfig = defaultSheetConfig) {
+  return (await getProductSheetRows(config)).find((row) => row.rowNumber === rowNumber);
+}
+
+export async function getUpdatedListRows() {
+  return getProductSheetRows(updatedListSheetConfig);
+}
+
+export async function getUpdatedListRow(rowNumber: number) {
+  return getProductSheetRow(rowNumber, updatedListSheetConfig);
+}
+
+export function productSheetSourceLabel(source: ProductSheetSource) {
+  return source === "updated-list" ? "Product list" : "Product Manager";
+}
+
+export function parseProductSheetSource(value: unknown): ProductSheetSource {
+  return value === "updated-list" ? "updated-list" : "product-manager";
 }

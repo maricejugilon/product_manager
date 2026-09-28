@@ -3,17 +3,24 @@ import "server-only";
 import {
   buildColourBoardAcfPayload,
   colourBoardPersonalizationMeta,
+  mergeProductAccessories,
+  mergeProductColourOptions,
   resolveAccessoryCrossSells,
   rowAccessories,
   rowColourOptions,
   sheetAccessoriesExpected,
   sheetColourBoardExpected,
-  sheetCustomNotesExpected
+  sheetCustomNotesExpected,
+  sheetSpecificationGroups,
+  sheetSpecificationsExpected,
+  scrapeProductColourOptions,
+  scrapeProductAccessories,
+  specificationMeta
 } from "@/lib/product-sheet-create";
 import type { SheetProductRow } from "@/lib/product-sheet";
 import type { ProductChanges, WooProduct } from "@/lib/types";
 
-export type ProductSheetFixField = "custom_notes" | "colour_board" | "accessories";
+export type ProductSheetFixField = "custom_notes" | "colour_board" | "accessories" | "specifications";
 
 function metaEntry(product: WooProduct, key: string, value: unknown) {
   const existing = product.meta_data?.find((item) => item.key === key);
@@ -62,7 +69,21 @@ function preserveExistingByName<T extends { name?: string; color_name?: string }
   return expected.map((item) => {
     const name = String(item.color_name ?? item.name ?? "");
 
-    return existingByName.get(normalizeText(name)) ?? item;
+    const current = existingByName.get(normalizeText(name));
+
+    return current ? { ...current, ...item } : item;
+  });
+}
+
+function mergeExistingColourOptions<T extends { color_name?: string }>(expected: T[], existing: T[]) {
+  const existingByName = new Map(
+    existing.map((item) => [normalizeText(String(item.color_name ?? "")), item])
+  );
+
+  return expected.map((item) => {
+    const current = existingByName.get(normalizeText(String(item.color_name ?? "")));
+
+    return current ? { ...current, ...item } : item;
   });
 }
 
@@ -98,16 +119,31 @@ export async function buildProductSheetFix(
   }
 
   if (fields.includes("colour_board")) {
-    const expectedOptions = rowColourOptions(row);
+    const sheetOptions = rowColourOptions(row);
+    let scrapedOptions: Awaited<ReturnType<typeof scrapeProductColourOptions>> = [];
+
+    if (row.liveUrl) {
+      try {
+        scrapedOptions = await scrapeProductColourOptions(row.liveUrl);
+      } catch (error) {
+        warnings.push(
+          `Could not read live colour-board prices; fallback values will be used: ${
+            error instanceof Error ? error.message : "unknown scrape error"
+          }`
+        );
+      }
+    }
+
+    const expectedOptions = mergeProductColourOptions(sheetOptions, scrapedOptions);
 
     if (sheetColourBoardExpected(row) && expectedOptions.length === 0) {
-      throw new Error("The sheet expects a colour board, but its color details are empty or marked ERROR.");
+      throw new Error("The sheet expects a colour board, but no colour options could be read from the sheet or product link.");
     }
 
     const existingOptions = safeArray<ReturnType<typeof rowColourOptions>[number]>(
       metaValue(product, "legacy_colour_board_options") ?? metaValue(product, "color_options")
     );
-    const options = preserveExistingByName(expectedOptions, existingOptions);
+    const options = mergeExistingColourOptions(expectedOptions, existingOptions);
     const rawJson = options.length > 0 ? JSON.stringify(options) : "";
     const payload = buildColourBoardAcfPayload(options);
 
@@ -122,17 +158,38 @@ export async function buildProductSheetFix(
   }
 
   if (fields.includes("accessories")) {
-    const expectedAccessories = rowAccessories(row);
+    const sheetAccessories = rowAccessories(row);
+    let scrapedAccessories: Awaited<ReturnType<typeof scrapeProductAccessories>> = [];
+
+    if (sheetAccessoriesExpected(row) && row.liveUrl) {
+      try {
+        scrapedAccessories = await scrapeProductAccessories(row.liveUrl);
+      } catch (error) {
+        warnings.push(
+          `Could not read accessories from the product link: ${
+            error instanceof Error ? error.message : "unknown scrape error"
+          }`
+        );
+      }
+    }
+
+    const expectedAccessories = mergeProductAccessories(sheetAccessories, scrapedAccessories);
 
     if (sheetAccessoriesExpected(row) && expectedAccessories.length === 0) {
-      throw new Error("The sheet expects accessories, but its accessories details are empty or marked ERROR.");
+      throw new Error(
+        row.liveUrl
+          ? "The sheet expects accessories, but no accessory products could be read from its product -link."
+          : 'The sheet expects accessories, but its details are empty and the row has no "product -link" to scrape.'
+      );
     }
 
     const existingAccessories = safeArray<ReturnType<typeof rowAccessories>[number]>(
       metaValue(product, "product_accessories")
     );
     const accessories = preserveExistingByName(expectedAccessories, existingAccessories);
-    const crossSells = await resolveAccessoryCrossSells(accessories);
+    const crossSells = await resolveAccessoryCrossSells(accessories, {
+      excludeProductId: product.id
+    });
 
     changes.cross_sell_ids = crossSells.ids;
     metaData = mergeMeta(metaData, [
@@ -142,7 +199,24 @@ export async function buildProductSheetFix(
       metaEntry(product, "_fcw_accessory_cross_sell_skus", JSON.stringify(crossSells.linkedSkus)),
       metaEntry(product, "_fcw_accessory_cross_sell_missing_names", JSON.stringify(crossSells.missing))
     ]);
-    warnings.push(...crossSells.missing.map((name) => `Accessory product not found: ${name}`));
+    warnings.push(
+      ...crossSells.missing.map(
+        (name) => `Accessory is not in WooCommerce; approval will create it from Product list: ${name}`
+      )
+    );
+  }
+
+  if (fields.includes("specifications")) {
+    const groups = sheetSpecificationGroups(row);
+
+    if (sheetSpecificationsExpected(row) && groups.length === 0) {
+      throw new Error("The sheet expects specifications, but its Feature value is empty or invalid.");
+    }
+
+    metaData = mergeMeta(
+      metaData,
+      specificationMeta(groups).map((item) => metaEntry(product, item.key, item.value))
+    );
   }
 
   if (metaData.length > 0) {

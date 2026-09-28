@@ -1,5 +1,6 @@
 import "server-only";
 
+import { COLOUR_BOARD_CHOICES } from "@/lib/colour-board-choices";
 import type { ProductChanges, WooProduct } from "@/lib/types";
 import { getAllProducts } from "@/lib/woocommerce";
 
@@ -10,6 +11,11 @@ type ColourBoardOption = {
   swatch_image_url?: string;
   option_image_url?: string;
   price_adjustment?: string;
+};
+
+type WordPressMedia = {
+  id?: number;
+  source_url?: string;
 };
 
 let mediaLookupCache: Promise<Map<string, string>> | null = null;
@@ -47,6 +53,48 @@ function normalizeUrl(value: string) {
     return url.toString().toLowerCase();
   } catch {
     return value.trim().toLowerCase();
+  }
+}
+
+function imageFileName(value: string) {
+  try {
+    const pathname = new URL(value).pathname;
+    return decodeURIComponent(pathname.slice(pathname.lastIndexOf("/") + 1)).toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+async function findWordPressMediaId(imageUrl: string) {
+  const storeUrl = process.env.WOOCOMMERCE_STORE_URL;
+  const fileName = imageFileName(imageUrl);
+
+  if (!storeUrl || !fileName) {
+    return undefined;
+  }
+
+  const search = fileName.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
+
+  try {
+    const url = new URL("/wp-json/wp/v2/media", storeUrl);
+    url.searchParams.set("search", search);
+    url.searchParams.set("per_page", "100");
+    url.searchParams.set("_fields", "id,source_url");
+    const response = await fetch(url, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(10_000)
+    });
+
+    if (!response.ok) {
+      return undefined;
+    }
+
+    const media = await response.json() as WordPressMedia[];
+    const exact = media.find((item) => imageFileName(asString(item.source_url)) === fileName);
+
+    return exact?.id ? String(exact.id) : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -136,10 +184,12 @@ async function buildColourBoardMediaLookup() {
   });
 
   for (const product of products) {
-    const rawOptions =
-      safeJsonParse(metaValue(product.meta_data, "legacy_colour_board_options")) ??
-      safeJsonParse(metaValue(product.meta_data, "color_options"));
-    const options = Array.isArray(rawOptions) ? (rawOptions as ColourBoardOption[]) : [];
+    const legacyOptions = safeJsonParse(metaValue(product.meta_data, "legacy_colour_board_options"));
+    const fallbackOptions = safeJsonParse(metaValue(product.meta_data, "color_options"));
+    const options = [
+      ...(Array.isArray(legacyOptions) ? legacyOptions as ColourBoardOption[] : []),
+      ...(Array.isArray(fallbackOptions) ? fallbackOptions as ColourBoardOption[] : [])
+    ];
 
     for (const [index, option] of options.entries()) {
       addLookup(lookup, candidates, option, metaValue(product.meta_data, `personalization_0_image_items_${index}_image`));
@@ -147,6 +197,21 @@ async function buildColourBoardMediaLookup() {
 
     for (const [index, option] of optionsFromProductPersonalizationMeta(product.meta_data).entries()) {
       addLookup(lookup, candidates, option, metaValue(product.meta_data, `personalization_0_image_items_${index}_image`));
+    }
+  }
+
+  addCandidateLookups(lookup, candidates);
+
+  const missingChoices = COLOUR_BOARD_CHOICES.filter(
+    (choice) => !lookup.has(optionNamePriceKey(choice)) && !lookup.has(optionNameKey(choice))
+  );
+
+  for (const choice of missingChoices) {
+    const imageUrl = choice.option_image_url || choice.swatch_image_url;
+    const mediaId = await findWordPressMediaId(imageUrl);
+
+    if (mediaId) {
+      addLookup(lookup, candidates, choice, mediaId);
     }
   }
 
@@ -175,13 +240,13 @@ function setChangedMetaValue(metaData: MetaEntry[], key: string, value: unknown)
 function resolveImageValue(lookup: Map<string, string>, option: ColourBoardOption, imageValue: unknown) {
   const image = asString(imageValue).trim();
 
-  if (!image || /^\d+$/.test(image)) {
+  if (/^\d+$/.test(image)) {
     return image;
   }
 
   return (
-    lookup.get(optionKey(option, image)) ??
-    lookup.get(normalizeUrl(image)) ??
+    (image ? lookup.get(optionKey(option, image)) : undefined) ??
+    (image ? lookup.get(normalizeUrl(image)) : undefined) ??
     lookup.get(optionNamePriceKey(option)) ??
     lookup.get(optionNameKey(option)) ??
     image

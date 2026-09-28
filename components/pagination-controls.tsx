@@ -10,11 +10,13 @@ type PaginationControlsProps = {
   totalItems: number;
   perPage: number;
   search: string;
-  category: string;
-  status: string;
-  stockStatus: string;
-  customNotes: string;
-  dimensions: string;
+  category?: string;
+  status?: string;
+  stockStatus?: string;
+  customNotes?: string;
+  dimensions?: string;
+  basePath?: string;
+  itemLabel?: string;
 };
 
 function pageWindow(currentPage: number, totalPages: number) {
@@ -35,11 +37,13 @@ export default function PaginationControls({
   totalItems,
   perPage,
   search,
-  category,
-  status,
-  stockStatus,
-  customNotes,
-  dimensions
+  category = "",
+  status = "",
+  stockStatus = "",
+  customNotes = "",
+  dimensions = "",
+  basePath = "/",
+  itemLabel = "products"
 }: PaginationControlsProps) {
   const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const safeTotalPages = Math.max(totalPages, 1);
@@ -78,7 +82,8 @@ export default function PaginationControls({
     params.set("per_page", String(perPage));
     params.set("page", String(page));
 
-    return `/?${params.toString()}`;
+    const query = params.toString();
+    return `${basePath}${query ? `?${query}` : ""}`;
   }
 
   function startLoading(page: number) {
@@ -103,7 +108,7 @@ export default function PaginationControls({
           <strong>
             Showing {start}-{end}
           </strong>
-          <span className="subtle">of {totalItems} products</span>
+          <span className="subtle">of {totalItems} {itemLabel}</span>
         </div>
         <div className="pagination-links">
           {safeCurrentPage > 1 ? (

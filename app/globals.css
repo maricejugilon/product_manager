@@ -400,6 +400,10 @@ button {
   text-transform: none;
 }
 
+.updated-list-filter-form {
+  grid-template-columns: minmax(260px, 1.7fr) minmax(220px, 1fr) 110px auto;
+}
+
 .product-selection-workspace {
   margin-bottom: 14px;
   overflow: hidden;
@@ -550,6 +554,99 @@ button {
 
 .product-list-table tbody tr:hover {
   background: #fafbfd;
+}
+
+.updated-list-table-shell {
+  overflow-x: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.updated-list-table-shell table {
+  min-width: 1220px;
+  table-layout: fixed;
+}
+
+.updated-list-table-shell th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.updated-list-table-shell th:first-child,
+.updated-list-table-shell td:first-child {
+  width: 280px;
+}
+
+.updated-list-table-shell th:nth-child(2),
+.updated-list-table-shell td:nth-child(2) {
+  width: 120px;
+}
+
+.updated-list-table-shell th:nth-child(3),
+.updated-list-table-shell td:nth-child(3),
+.updated-list-table-shell th:nth-child(4),
+.updated-list-table-shell td:nth-child(4),
+.updated-list-table-shell th:nth-child(5),
+.updated-list-table-shell td:nth-child(5),
+.updated-list-table-shell th:nth-child(6),
+.updated-list-table-shell td:nth-child(6) {
+  width: 145px;
+}
+
+.updated-list-table-shell th:nth-child(7),
+.updated-list-table-shell td:nth-child(7) {
+  width: 170px;
+}
+
+.updated-list-table-shell th:last-child,
+.updated-list-table-shell td:last-child {
+  width: 135px;
+}
+
+.updated-list-product-name {
+  display: block;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.updated-list-row-number {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.updated-list-field-status {
+  display: grid;
+  justify-items: start;
+  gap: 5px;
+}
+
+.updated-list-field-status > span:not(.status) {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.updated-list-field-status.is-empty {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.updated-list-link-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.updated-list-link-actions .button {
+  white-space: nowrap;
 }
 
 .product-list-price {

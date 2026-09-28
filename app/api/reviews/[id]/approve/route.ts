@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { approveReview } from "@/lib/review-approval";
 import { acquireReviewLock, getReview, isReviewStorageMissing, releaseReviewLock } from "@/lib/review-store";
 
+export const maxDuration = 300;
+
 export async function POST(
   _request: Request,
   context: { params: Promise<{ id: string }> | { id: string } }

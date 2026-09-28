@@ -1,15 +1,23 @@
 import "server-only";
 
-import { getProductSheetRows, type SheetProductRow } from "@/lib/product-sheet";
+import {
+  getProductSheetRow,
+  getProductSheetRows,
+  getUpdatedListRow,
+  type ProductSheetSource,
+  type SheetProductRow
+} from "@/lib/product-sheet";
 import {
   rowAccessories,
   rowColourOptions,
+  hasProductManagerSheetField,
   sheetAccessoriesExpected,
   sheetColourBoardExpected,
-  sheetCustomNotesExpected
+  sheetCustomNotesExpected,
+  sheetSpecificationsExpected
 } from "@/lib/product-sheet-create";
 import type { WooCategory, WooProduct } from "@/lib/types";
-import { getCategories, getProducts, productHasCustomNotes } from "@/lib/woocommerce";
+import { getCategories, getProduct, getProducts, productHasCustomNotes } from "@/lib/woocommerce";
 
 export type SheetFieldComparison = {
   available: boolean;
@@ -46,6 +54,11 @@ export type ProductSheetValidationResult = {
   };
   colourBoardComparison: SheetFieldComparison;
   accessoriesComparison: SheetFieldComparison;
+  specificationsComparison: {
+    sheet: boolean;
+    woo: boolean;
+    matches: boolean;
+  };
 };
 
 let categoriesCache: {
@@ -57,16 +70,42 @@ function normalizeText(value: string) {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+function normalizeIdentityName(value: string) {
+  return value
+    .replace(/&(#x[0-9a-f]+|#\d+|amp|apos|gt|lt|nbsp|quot);/gi, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeIdentitySku(value: string) {
+  return value.replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+export function findLikelyDraftProduct(row: SheetProductRow, candidates: WooProduct[]) {
+  const sourceTokens = new Set(normalizeIdentityName(row.name).split(" ").filter(Boolean));
+  const likelyDrafts = [...new Map(candidates.map((product) => [product.id, product])).values()]
+    .filter((product) => {
+      if (product.status !== "draft") {
+        return false;
+      }
+
+      const candidateTokens = normalizeIdentityName(product.name).split(" ").filter(Boolean);
+
+      return candidateTokens.length >= 3 && candidateTokens.every((token) => sourceTokens.has(token));
+    });
+
+  return likelyDrafts.length === 1 ? likelyDrafts[0] : undefined;
+}
+
 function unique(values: string[]) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 function metaValue(product: WooProduct | undefined, key: string) {
   return product?.meta_data?.find((item) => item.key === key)?.value;
-}
-
-function hasExactSheetField(row: SheetProductRow, header: string) {
-  return Object.keys(row.values).some((key) => key.trim() === header);
 }
 
 function safeArray(value: unknown) {
@@ -140,24 +179,13 @@ function compareValues(
 }
 
 function wooColourNames(product: WooProduct | undefined) {
-  const raw =
-    metaValue(product, "legacy_colour_board_options") ??
-    metaValue(product, "color_options");
-  const names = safeArray(raw)
-    .map((item) => String(item.color_name ?? item.name ?? "").trim())
-    .filter((name) => name && !/^(?:none|no colou?r option)$/i.test(name));
-
-  if (names.length > 0) {
-    return unique(names);
-  }
-
   const count = Number(metaValue(product, "personalization_0_image_items") ?? 0);
+  const names = Array.from(
+    { length: Number.isFinite(count) && count > 0 ? count : 0 },
+    (_, index) => String(metaValue(product, `personalization_0_image_items_${index}_name`) ?? "").trim()
+  ).filter((name) => name && !/^(?:none|no colou?r option)$/i.test(name));
 
-  return unique(
-    Array.from({ length: Number.isFinite(count) ? count : 0 }, (_, index) =>
-      String(metaValue(product, `personalization_0_image_items_${index}_name`) ?? "").trim()
-    )
-  );
+  return unique(names);
 }
 
 function wooAccessoryNames(product: WooProduct | undefined) {
@@ -171,36 +199,77 @@ function wooAccessoryNames(product: WooProduct | undefined) {
   );
 }
 
+function wooSpecificationsPresent(product: WooProduct | undefined) {
+  const groups = safeArray(metaValue(product, "technical_specifications"));
+  const hasJsonSpecifications = groups.some((group) =>
+    safeArray(group.specifications).some((specification) =>
+      Boolean(String(specification.name ?? specification.value ?? "").trim())
+    )
+  );
+
+  if (hasJsonSpecifications) {
+    return true;
+  }
+
+  const featureCount = Number(metaValue(product, "_fcw_features_specification_count") ?? 0);
+  if (Number.isFinite(featureCount) && featureCount > 0) {
+    return true;
+  }
+
+  return Boolean(product?.meta_data?.some((item) =>
+    /^groups_\d+_specifications_\d+_(?:name|value)$/.test(item.key) &&
+    String(item.value ?? "").trim()
+  ));
+}
+
 function compareSheetFields(row: SheetProductRow, product: WooProduct | undefined) {
   const sheetCustomNotes = sheetCustomNotesExpected(row);
   const sheetColours = rowColourOptions(row).map((option) => String(option.color_name ?? "").trim()).filter(Boolean);
   const sheetAccessories = rowAccessories(row).map((item) => String(item.name ?? "").trim()).filter(Boolean);
   const wooColours = wooColourNames(product);
   const wooAccessories = wooAccessoryNames(product);
+  const sheetSpecifications = sheetSpecificationsExpected(row);
+  const wooSpecifications = wooSpecificationsPresent(product);
+  const customNoteFieldAvailable = hasProductManagerSheetField(row, "customNotes");
+  const colourBoardFieldAvailable = hasProductManagerSheetField(row, "colourBoard");
+  const accessoriesFieldAvailable = hasProductManagerSheetField(row, "accessories");
+  const accessoriesComparison = compareValues(
+    accessoriesFieldAvailable,
+    sheetAccessoriesExpected(row),
+    sheetAccessories,
+    wooAccessories,
+    (product?.cross_sell_ids?.length ?? 0) > 0
+  );
+  const expectedAccessoryCount = new Set(sheetAccessories.map(normalizeText)).size;
+  const linkedAccessoryCount = new Set(product?.cross_sell_ids ?? []).size;
 
   return {
     customNotesComparison: {
-      available: hasExactSheetField(row, "custom notes"),
+      available: customNoteFieldAvailable,
       sheet: sheetCustomNotes,
       woo: productHasCustomNotes(product ?? {}),
       matches:
-        !hasExactSheetField(row, "custom notes") ||
+        !customNoteFieldAvailable ||
         (Boolean(product) && sheetCustomNotes === productHasCustomNotes(product ?? {}))
     },
     colourBoardComparison: compareValues(
-      hasExactSheetField(row, "color"),
+      colourBoardFieldAvailable,
       sheetColourBoardExpected(row),
       sheetColours,
       wooColours,
-      wooColours.length > 0 || Number(metaValue(product, "_fcw_colour_board_option_count") ?? 0) > 0
+      wooColours.length > 0
     ),
-    accessoriesComparison: compareValues(
-      hasExactSheetField(row, "accessories"),
-      sheetAccessoriesExpected(row),
-      sheetAccessories,
-      wooAccessories,
-      wooAccessories.length > 0 || (product?.cross_sell_ids?.length ?? 0) > 0
-    )
+    accessoriesComparison: {
+      ...accessoriesComparison,
+      matches:
+        accessoriesComparison.matches &&
+        (expectedAccessoryCount === 0 || linkedAccessoryCount >= expectedAccessoryCount)
+    },
+    specificationsComparison: {
+      sheet: sheetSpecifications,
+      woo: wooSpecifications,
+      matches: !sheetSpecifications || wooSpecifications
+    }
   };
 }
 
@@ -282,6 +351,7 @@ function bestSkuMatch(products: WooProduct[], sku: string) {
 
 async function matchWooProduct(row: SheetProductRow) {
   const lookupErrors: string[] = [];
+  const candidates: WooProduct[] = [];
 
   if (!row.sku && !row.name) {
     return {
@@ -298,6 +368,7 @@ async function matchWooProduct(row: SheetProductRow) {
         perPage: 10,
         status: "any"
       });
+      candidates.push(...skuResult.data);
 
       if (skuResult.data.length === 1) {
         return {
@@ -309,6 +380,19 @@ async function matchWooProduct(row: SheetProductRow) {
       }
 
       if (skuResult.data.length > 1) {
+        const exactSkuMatches = skuResult.data.filter(
+          (product) => normalizeIdentitySku(product.sku || "") === normalizeIdentitySku(row.sku)
+        );
+
+        if (exactSkuMatches.length === 1) {
+          return {
+            status: "matched" as const,
+            matchMethod: "sku" as const,
+            product: exactSkuMatches[0],
+            candidates: skuResult.data
+          };
+        }
+
         return {
           status: "ambiguous" as const,
           matchMethod: "sku" as const,
@@ -328,34 +412,27 @@ async function matchWooProduct(row: SheetProductRow) {
         perPage: 10,
         status: "any"
       });
-      const exactName = nameResult.data.find((product) => normalizeText(product.name) === normalizeText(row.name));
+      candidates.push(...nameResult.data);
+      const exactNameMatches = nameResult.data.filter(
+        (product) => normalizeIdentityName(product.name) === normalizeIdentityName(row.name)
+      );
 
-      if (exactName) {
+      if (exactNameMatches.length === 1) {
         return {
           status: "matched" as const,
           matchMethod: "name" as const,
-          product: exactName,
+          product: exactNameMatches[0],
           candidates: nameResult.data,
           error: lookupErrors.join(" ")
         };
       }
 
-      if (nameResult.data.length === 1) {
-        return {
-          status: "matched" as const,
-          matchMethod: "name" as const,
-          product: nameResult.data[0],
-          candidates: nameResult.data,
-          error: lookupErrors.join(" ")
-        };
-      }
-
-      if (nameResult.data.length > 1) {
+      if (exactNameMatches.length > 1) {
         return {
           status: "ambiguous" as const,
           matchMethod: "name" as const,
-          product: nameResult.data[0],
-          candidates: nameResult.data,
+          product: exactNameMatches[0],
+          candidates: exactNameMatches,
           error: lookupErrors.join(" ")
         };
       }
@@ -376,7 +453,43 @@ async function matchWooProduct(row: SheetProductRow) {
   return {
     status: "not_found" as const,
     matchMethod: "none" as const,
-    candidates: []
+    candidates: [...new Map(candidates.map((product) => [product.id, product])).values()]
+  };
+}
+
+export async function validateProductSheetFixTarget(
+  rowNumber: number,
+  productId: number,
+  source: ProductSheetSource = "product-manager"
+) {
+  const [row, product] = await Promise.all([
+    source === "updated-list" ? getUpdatedListRow(rowNumber) : getProductSheetRow(rowNumber),
+    getProduct(productId)
+  ]);
+
+  if (!row) {
+    return undefined;
+  }
+
+  const skuMatches = Boolean(
+    row.sku &&
+    product.sku &&
+    normalizeIdentitySku(row.sku) === normalizeIdentitySku(product.sku)
+  );
+  const nameMatches = Boolean(
+    row.name &&
+    product.name &&
+    normalizeIdentityName(row.name) === normalizeIdentityName(product.name)
+  );
+
+  if (!skuMatches && !nameMatches) {
+    throw new Error("The selected WooCommerce product no longer matches this Product Manager row.");
+  }
+
+  return {
+    row,
+    product,
+    ...compareSheetFields(row, product)
   };
 }
 
@@ -425,6 +538,22 @@ async function validateRows(rows: SheetProductRow[], categories: WooCategory[]) 
       };
     }
   });
+}
+
+export async function validateProductSheetSourceRow(
+  rowNumber: number,
+  source: ProductSheetSource = "product-manager"
+) {
+  const [row, categories] = await Promise.all([
+    source === "updated-list" ? getUpdatedListRow(rowNumber) : getProductSheetRow(rowNumber),
+    getCachedCategories()
+  ]);
+
+  if (!row) {
+    return undefined;
+  }
+
+  return (await validateRows([row], categories))[0];
 }
 
 export async function validateProductSheetRows(options: ValidateProductSheetRowsOptions = {}) {

@@ -99,7 +99,7 @@ export default function ProductBulkTable({
     const manageStock = form.get("manage_stock") === "on";
 
     if (!quantityRaw && status === "keep" && backorders === "keep" && !manageStock) {
-      setError("Choose a stock quantity, stock status, or stock tracking change.");
+      setError("Choose a stock quantity, stock status, backorders, or stock tracking change.");
       return;
     }
 
@@ -452,7 +452,7 @@ export default function ProductBulkTable({
                 <select
                   id="bulk-backorders"
                   name="backorders"
-                  defaultValue="notify"
+                  defaultValue="keep"
                   onChange={(event) => {
                     const backorders = event.currentTarget.value;
                     const stockStatusField = document.getElementById("bulk-stock-status");
@@ -462,6 +462,7 @@ export default function ProductBulkTable({
                     }
                   }}
                 >
+                  <option value="keep">Keep current backorders</option>
                   <option value="no">Do not allow</option>
                   <option value="notify">Allow and notify customer</option>
                   <option value="yes">Allow</option>

@@ -1,8 +1,14 @@
 import "server-only";
 
 import { COLOUR_BOARD_CHOICES } from "@/lib/colour-board-choices";
-import { getProductSheetRow, type SheetCategoryHierarchy, type SheetProductRow } from "@/lib/product-sheet";
-import type { ProductChanges, WooCategory } from "@/lib/types";
+import {
+  getProductSheetRow,
+  getUpdatedListRow,
+  type ProductSheetSource,
+  type SheetCategoryHierarchy,
+  type SheetProductRow
+} from "@/lib/product-sheet";
+import type { ProductChanges, WooCategory, WooProduct } from "@/lib/types";
 import { getCategories, getProducts } from "@/lib/woocommerce";
 
 type ScrapedProductData = {
@@ -14,6 +20,8 @@ type ScrapedProductData = {
   price: string;
   stockStatus?: ProductChanges["stock_status"];
   images: string[];
+  colourOptions: ColourBoardOption[];
+  accessories: AccessoryItem[];
 };
 
 type CategoryResolution = {
@@ -27,6 +35,9 @@ export type AccessoryItem = {
   price?: string;
   url?: string;
   image_url?: string;
+  source_product_id?: string;
+  source_section_id?: string;
+  source_section_type?: string;
   relationship_type?: string;
   option_group?: string;
   notes?: string;
@@ -43,7 +54,7 @@ export type ColourBoardOption = {
   notes?: string;
 };
 
-type SpecificationGroup = {
+export type SpecificationGroup = {
   group_name: string;
   specifications: Array<{ name: string; value: string }>;
 };
@@ -107,8 +118,12 @@ function extractProductDescriptionHtml(html: string) {
 }
 
 function fieldValue(values: Record<string, string>, aliases: string[]) {
-  const normalizedAliases = new Set(aliases.map(normalizeText));
-  const match = Object.entries(values).find(([key]) => normalizedAliases.has(normalizeText(key)));
+  const normalizedAliases = aliases.map((alias) => normalizeText(alias));
+  const match = Object.entries(values).find(([key]) => {
+    const normalizedKey = normalizeText(key);
+
+    return normalizedAliases.some((alias) => normalizedKey === alias || normalizedKey.includes(alias));
+  });
 
   return match?.[1]?.trim() ?? "";
 }
@@ -117,7 +132,7 @@ function findValue(values: Record<string, string>, includes: string[]) {
   const match = Object.entries(values).find(([key]) => {
     const normalized = normalizeText(key);
 
-    return includes.every((item) => normalized.includes(item));
+    return includes.every((item) => normalized.includes(normalizeText(item)));
   });
 
   return match?.[1]?.trim() ?? "";
@@ -127,12 +142,137 @@ function sheetField(row: SheetProductRow, aliases: string[]) {
   return fieldValue(row.values, aliases) || aliases.map((alias) => findValue(row.values, alias.split(/\s+/))).find(Boolean) || "";
 }
 
-function exactSheetField(row: SheetProductRow, header: string) {
-  return Object.entries(row.values).find(([key]) => key.trim() === header)?.[1]?.trim() ?? "";
+export const PRODUCT_MANAGER_SHEET_FIELDS = {
+  colourBoard: "colour_option",
+  accessories: "accessories_option",
+  customNotes: "custom_notes"
+} as const;
+
+export type ProductManagerSheetField = keyof typeof PRODUCT_MANAGER_SHEET_FIELDS;
+
+const productManagerSheetFieldAliases: Record<ProductManagerSheetField, string[]> = {
+  colourBoard: [
+    "Colour Board",
+    "Colour Option",
+    "Colour",
+    "Color"
+  ],
+  accessories: [
+    "Accessories Option",
+    "Accessories"
+  ],
+  customNotes: [
+    "Meta: custom_notes",
+    "Meta: _custom_notes",
+    "_custom_notes",
+    "Custom Notes",
+    "Custom Note"
+  ]
+};
+
+function productManagerSheetFieldEntry(row: SheetProductRow, field: ProductManagerSheetField) {
+  const headers = [PRODUCT_MANAGER_SHEET_FIELDS[field], ...productManagerSheetFieldAliases[field]];
+
+  for (const header of headers) {
+    const entry = Object.entries(row.values).find(([key]) => key.trim() === header);
+
+    if (entry) {
+      return { header: entry[0], value: entry[1].trim() };
+    }
+  }
+
+  for (const header of headers) {
+    const normalizedHeader = normalizeText(header);
+    const entry = Object.entries(row.values).find(([key]) => normalizeText(key) === normalizedHeader);
+
+    if (entry) {
+      return { header: entry[0], value: entry[1].trim() };
+    }
+  }
+
+  return undefined;
 }
 
-function isYes(value: string) {
-  return ["1", "yes", "true", "on"].includes(normalizeText(value));
+export function hasProductManagerSheetField(row: SheetProductRow, field: ProductManagerSheetField) {
+  return Boolean(productManagerSheetFieldEntry(row, field));
+}
+
+export function productManagerSheetFieldValue(row: SheetProductRow, field: ProductManagerSheetField) {
+  return productManagerSheetFieldEntry(row, field)?.value ?? "";
+}
+
+function productManagerSheetDetailValue(
+  row: SheetProductRow,
+  field: "colourBoard" | "accessories"
+) {
+  const headers = field === "colourBoard"
+    ? [
+        "Meta: legacy_colour_board_options",
+        "legacy_colour_board_options",
+        "Meta: color_options",
+        "color_options",
+        "color",
+        "colour"
+      ]
+    : [
+        "Meta: product_accessories",
+        "product_accessories",
+        "Meta: _fcw_accessory_cross_sell_names",
+        "_fcw_accessory_cross_sell_names",
+        "accessories"
+      ];
+
+  for (const header of headers) {
+    if (Object.prototype.hasOwnProperty.call(row.values, header)) {
+      const value = row.values[header]?.trim() ?? "";
+
+      if (value) {
+        return value;
+      }
+    }
+  }
+
+  return "";
+}
+
+function explicitBoolean(value: string | undefined): boolean | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const normalized = normalizeText(value);
+
+  if (["1", "yes", "true", "on", "y", "present", "included", "required", "available"].includes(normalized)) {
+    return true;
+  }
+
+  if (
+    [
+      "0",
+      "no",
+      "false",
+      "off",
+      "n",
+      "none",
+      "missing",
+      "not present",
+      "not included",
+      "not required",
+      "no option",
+      "no colour option",
+      "no color option",
+      "no accessories",
+      "absent",
+      "error",
+      "in stock",
+      "out of stock",
+      "on backorder"
+    ].includes(normalized)
+  ) {
+    return false;
+  }
+
+  return undefined;
 }
 
 function pipeValues(value: string) {
@@ -172,6 +312,13 @@ function absoluteUrl(value: string, baseUrl: string) {
   } catch {
     return "";
   }
+}
+
+function htmlAttribute(value: string, name: string) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = value.match(new RegExp(`${escaped}=["']([^"']*)["']`, "i"));
+
+  return match ? htmlDecode(match[1]).trim() : "";
 }
 
 function isSupportedImageUrl(value: string) {
@@ -218,6 +365,94 @@ function jsonLdImages(value: unknown, baseUrl: string) {
   return images.map((image) => absoluteUrl(String(image), baseUrl)).filter(Boolean);
 }
 
+function parseProductColourOptions(html: string, baseUrl: string) {
+  const opening = /<div[^>]*class=["'][^"']*\bcolour-boards\b[^"']*["'][^>]*>/i.exec(html);
+  const remainder = opening
+    ? html.slice((opening.index ?? 0) + opening[0].length)
+    : "";
+  const boundaryIndexes = [
+    remainder.search(/<div[^>]*class=["'][^"']*\baccessories\b[^"']*["'][^>]*>/i),
+    remainder.search(/<\/form>/i)
+  ].filter((index) => index >= 0);
+  const colourSection = boundaryIndexes.length > 0
+    ? remainder.slice(0, Math.min(...boundaryIndexes))
+    : remainder;
+  const options = [...colourSection.matchAll(/<label\b[^>]*>([\s\S]*?)<\/label>/gi)]
+    .map((match) => {
+      const block = match[1];
+      const input = block.match(/<input[^>]*class=["'][^"']*\blogAccessory\b[^"']*["'][^>]*>/i)?.[0] ?? "";
+
+      if (!input) {
+        return undefined;
+      }
+
+      const image = block.match(/<img[^>]*>/i)?.[0] ?? "";
+      const name = htmlAttribute(input, "data-name") ||
+        stripTags(block.match(/<div[^>]*class=["']title["'][^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? "");
+      const imageUrl = absoluteUrl(
+        htmlAttribute(image, "data-src") || htmlAttribute(image, "src"),
+        baseUrl
+      );
+
+      if (!name) {
+        return undefined;
+      }
+
+      return enrichColourBoardOption({
+        option_group: "Personalise this item with coloured board",
+        color_name: name,
+        swatch_image_url: imageUrl,
+        option_image_url: imageUrl,
+        price_adjustment: parseMoney(htmlAttribute(input, "data-price")),
+        default_option: false
+      });
+    })
+    .filter((option): option is ColourBoardOption => Boolean(option));
+
+  return [...new Map(
+    options.map((option) => [normalizeText(String(option.color_name ?? "")), option])
+  ).values()];
+}
+
+function parseProductAccessories(html: string, baseUrl: string) {
+  const accessorySection = html.match(
+    /<h3[^>]*>\s*Do you need accessories\?\s*<\/h3>([\s\S]*?)<\/div>\s*<!--\s*\.accessoriesGrid\s*-->/i
+  )?.[1] ?? "";
+  const accessories = [...accessorySection.matchAll(
+    /<div[^>]*class=["']accessory["'][^>]*>([\s\S]*?)<\/div>\s*<!--\s*\.col\s*-->/gi
+  )].map((match) => {
+    const block = match[1];
+    const input = block.match(/<input[^>]*class=["'][^"']*\blogAccessory\b[^"']*["'][^>]*>/i)?.[0] ?? "";
+    const image = block.match(/<img[^>]*>/i)?.[0] ?? "";
+    const sectionIdInput = block.match(/<input[^>]*class=["'][^"']*\bacc_sectionId\b[^"']*["'][^>]*>/i)?.[0] ?? "";
+    const sectionTypeInput = block.match(/<input[^>]*class=["'][^"']*\bacc_sectionType\b[^"']*["'][^>]*>/i)?.[0] ?? "";
+    const name = htmlAttribute(input, "data-name") ||
+      stripTags(block.match(/<div[^>]*class=["']title["'][^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? "");
+    const imageUrl = absoluteUrl(
+      htmlAttribute(image, "data-src") || htmlAttribute(image, "src"),
+      baseUrl
+    );
+
+    return {
+      name,
+      price: parseMoney(htmlAttribute(input, "data-price")),
+      image_url: imageUrl,
+      source_product_id: htmlAttribute(input, "data-id") || htmlAttribute(input, "value"),
+      source_section_id: htmlAttribute(sectionIdInput, "value"),
+      source_section_type: htmlAttribute(sectionTypeInput, "value"),
+      relationship_type: "recommended",
+      option_group: "Frequently bought with these accessories"
+    } satisfies AccessoryItem;
+  }).filter((accessory) => accessory.name);
+
+  return [...new Map(
+    accessories.map((accessory) => [
+      accessory.source_product_id || normalizeAccessoryName(String(accessory.name ?? "")),
+      accessory
+    ])
+  ).values()];
+}
+
 export async function scrapeLiveProduct(url: string): Promise<ScrapedProductData> {
   const response = await fetch(url, {
     cache: "no-store",
@@ -258,8 +493,42 @@ export async function scrapeLiveProduct(url: string): Promise<ScrapedProductData
     sku,
     price,
     stockStatus,
-    images: [...new Set(images)]
+    images: [...new Set(images)],
+    colourOptions: parseProductColourOptions(html, response.url),
+    accessories: parseProductAccessories(html, response.url)
   };
+}
+
+export async function scrapeProductColourOptions(url: string): Promise<ColourBoardOption[]> {
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: {
+      "User-Agent": "FCW Product Sheet Validator"
+    }
+  });
+  const html = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`Colour board scrape failed: ${response.status}`);
+  }
+
+  return parseProductColourOptions(html, response.url);
+}
+
+export async function scrapeProductAccessories(url: string): Promise<AccessoryItem[]> {
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: {
+      "User-Agent": "FCW Product Sheet Validator"
+    }
+  });
+  const html = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`Accessory scrape failed: ${response.status}`);
+  }
+
+  return parseProductAccessories(html, response.url);
 }
 
 function categoryPath(category: WooCategory, categoryById: Map<number, WooCategory>) {
@@ -276,11 +545,46 @@ function categoryPath(category: WooCategory, categoryById: Map<number, WooCatego
   return path;
 }
 
+function normalizeCategoryName(value: string) {
+  const normalized = htmlDecode(value)
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/\//g, " and ")
+    .replace(/\bvisual\b/g, "video")
+    .replace(/\bflight\s*cases?\b|\bflightcases?\b/g, "cases")
+    .replace(/\bspares\b/g, "spare")
+    .replace(/\band\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return normalized === "toolbox backline cases" ? "backline tool cases" : normalized;
+}
+
+function categoryNamesMatch(first: string, second: string) {
+  const normalizedFirst = normalizeCategoryName(first);
+  const normalizedSecond = normalizeCategoryName(second);
+
+  return (
+    normalizedFirst === normalizedSecond ||
+    (Math.min(normalizedFirst.length, normalizedSecond.length) >= 8 &&
+      (normalizedFirst.includes(normalizedSecond) || normalizedSecond.includes(normalizedFirst)))
+  );
+}
+
 function pathsMatch(first: string[], second: string[]) {
   return (
     first.length === second.length &&
-    first.every((item, index) => normalizeText(item) === normalizeText(second[index] ?? ""))
+    first.every((item, index) => categoryNamesMatch(item, second[index] ?? ""))
   );
+}
+
+function oneCategoryPath(categories: WooCategory[], categoryById: Map<number, WooCategory>) {
+  const paths = new Set(
+    categories.map((category) => categoryPath(category, categoryById).map(normalizeCategoryName).join(" > "))
+  );
+
+  return paths.size === 1 ? categories[0] : undefined;
 }
 
 function resolveCategory(categories: WooCategory[], hierarchy: SheetCategoryHierarchy) {
@@ -291,13 +595,46 @@ function resolveCategory(categories: WooCategory[], hierarchy: SheetCategoryHier
     return exact;
   }
 
-  const leaf = hierarchy.path[hierarchy.path.length - 1];
-  const leafMatches = categories.filter((category) => normalizeText(category.name) === normalizeText(leaf));
+  const suffix = categories.find((category) => {
+    const path = categoryPath(category, categoryById);
 
-  return leafMatches.length === 1 ? leafMatches[0] : undefined;
+    return (
+      path.length < hierarchy.path.length &&
+      pathsMatch(path, hierarchy.path.slice(hierarchy.path.length - path.length))
+    );
+  });
+
+  if (suffix) {
+    return suffix;
+  }
+
+  const leaf = hierarchy.path[hierarchy.path.length - 1];
+  const normalizedLeaf = normalizeCategoryName(leaf);
+  const parentPath = hierarchy.path.slice(0, -1);
+  const parentAwareMatches = categories.filter((category) => {
+    const path = categoryPath(category, categoryById);
+    const categoryLeaf = normalizeCategoryName(path[path.length - 1] ?? "");
+
+    return (
+      path.length === hierarchy.path.length &&
+      pathsMatch(path.slice(0, -1), parentPath) &&
+      (categoryLeaf.includes(normalizedLeaf) || normalizedLeaf.includes(categoryLeaf))
+    );
+  });
+  const parentAwareMatch = oneCategoryPath(parentAwareMatches, categoryById);
+
+  if (parentAwareMatch) {
+    return parentAwareMatch;
+  }
+
+  const leafMatches = categories.filter(
+    (category) => normalizeCategoryName(category.name) === normalizedLeaf
+  );
+
+  return oneCategoryPath(leafMatches, categoryById);
 }
 
-function resolveCategories(row: SheetProductRow, categories: WooCategory[]): CategoryResolution {
+export function resolveCategories(row: SheetProductRow, categories: WooCategory[]): CategoryResolution {
   const warnings: string[] = [];
   const categoryIds = row.categoryHierarchy
     .map((hierarchy) => {
@@ -325,27 +662,81 @@ function sheetPrice(row: SheetProductRow) {
 }
 
 export function sheetCustomNotesExpected(row: SheetProductRow) {
-  return isYes(exactSheetField(row, "custom notes"));
+  const value = productManagerSheetFieldValue(row, "customNotes");
+  return explicitBoolean(value) ?? false;
 }
 
 export function sheetColourBoardExpected(row: SheetProductRow) {
-  return isYes(exactSheetField(row, "Color"));
+  const value = productManagerSheetFieldValue(row, "colourBoard");
+
+  const explicit = explicitBoolean(value);
+
+  if (explicit !== undefined) {
+    return explicit;
+  }
+
+  return rowColourOptions(row).length > 0;
 }
 
 export function sheetAccessoriesExpected(row: SheetProductRow) {
-  return isYes(exactSheetField(row, "Accessories"));
+  const value = productManagerSheetFieldValue(row, "accessories");
+
+  const explicit = explicitBoolean(value);
+
+  if (explicit !== undefined) {
+    return explicit;
+  }
+
+  return rowAccessories(row).length > 0;
+}
+
+export function sheetFeatureValue(row: SheetProductRow) {
+  const entry = Object.entries(row.values).find(([key]) => {
+    const normalized = normalizeText(key);
+    return normalized === "feature" || normalized === "features";
+  });
+
+  return entry?.[1]?.trim() ?? "";
+}
+
+export function sheetSpecificationsExpected(row: SheetProductRow) {
+  const value = sheetFeatureValue(row);
+
+  return Boolean(value) && !/^(?:no|none|n\/?a|error|not available)(?:\b|$)/i.test(value);
+}
+
+export function sheetSpecificationGroups(row: SheetProductRow): SpecificationGroup[] {
+  const specifications = sheetFeatureValue(row)
+    .split(/\s*\|\s*/g)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      const separator = item.indexOf(":");
+
+      return separator >= 0
+        ? { name: item.slice(0, separator).trim(), value: item.slice(separator + 1).trim() }
+        : { name: item, value: "" };
+    })
+    .filter((specification) => specification.name || specification.value);
+
+  return specifications.length > 0
+    ? [{ group_name: "Features", specifications }]
+    : [];
 }
 
 export function rowAccessories(row: SheetProductRow) {
-  const json = safeJsonParse<AccessoryItem>(
-    sheetField(row, ["meta:product_accessories", "product_accessories", "product accessories"])
-  ).filter((item) => item && typeof item === "object");
+  const value = productManagerSheetDetailValue(row, "accessories");
+  const json = safeJsonParse<AccessoryItem>(value).filter((item) => item && typeof item === "object");
 
   if (json.length > 0) {
     return json;
   }
 
-  return pipeValues(exactSheetField(row, "accessories"))
+  if (explicitBoolean(value) !== undefined) {
+    return [];
+  }
+
+  return pipeValues(value)
     .filter((name) => !/^(?:error|no accessories)$/i.test(name))
     .filter((name) => normalizeText(name) !== normalizeText(row.name))
     .map((name) => ({
@@ -355,84 +746,249 @@ export function rowAccessories(row: SheetProductRow) {
     }));
 }
 
-export function rowColourOptions(row: SheetProductRow) {
-  const json = safeJsonParse<ColourBoardOption>(
-    sheetField(row, ["meta:legacy_colour_board_options", "legacy_colour_board_options", "meta:color_options", "color_options"])
-  ).filter((item) => item && typeof item === "object");
-
-  if (json.length > 0) {
-    return json;
+export function mergeProductAccessories(expected: AccessoryItem[], scraped: AccessoryItem[]) {
+  if (expected.length === 0) {
+    return scraped;
   }
 
-  const choicesByName = new Map(
-    COLOUR_BOARD_CHOICES.map((choice) => [normalizeText(choice.color_name), choice])
+  const scrapedByName = new Map(
+    scraped.map((accessory) => [normalizeAccessoryName(String(accessory.name ?? "")), accessory])
   );
 
-  return pipeValues(exactSheetField(row, "color"))
-    .filter((name) => !/^(?:error|no colou?r option)$/i.test(name))
-    .map((name) => {
-      const choice = choicesByName.get(normalizeText(name));
+  return expected.map((accessory) => {
+    const live = scrapedByName.get(normalizeAccessoryName(String(accessory.name ?? "")));
 
-      return choice
-        ? {
-            option_group: choice.option_group,
-            color_name: choice.color_name,
-            color_hex: choice.color_hex,
-            swatch_image_url: choice.swatch_image_url,
-            option_image_url: choice.option_image_url,
-            price_adjustment: choice.price_adjustment,
-            default_option: choice.default_option,
-            notes: choice.notes
-          }
-        : {
-            option_group: "Personalise this item with coloured board",
-            color_name: name,
-            price_adjustment: "0",
-            default_option: false
-          };
-    });
+    return live ? { ...accessory, ...live } : accessory;
+  });
 }
 
-async function findAccessoryProduct(accessory: AccessoryItem) {
-  const name = String(accessory.name ?? "").trim();
-  const sku = String(accessory.sku ?? "").trim();
+function enrichColourBoardOption(option: ColourBoardOption): ColourBoardOption {
+  const name = String(option.color_name ?? "").trim();
+  const candidates = COLOUR_BOARD_CHOICES.filter(
+    (choice) => normalizeText(choice.color_name) === normalizeText(name)
+  );
+  const price = String(option.price_adjustment ?? "").trim();
+  const choice = candidates.find(
+    (candidate) => price && String(candidate.price_adjustment).trim() === price
+  ) ?? [...candidates].sort((first, second) => second.source_count - first.source_count)[0];
 
-  if (name) {
-    const result = await getProducts({ search: name, perPage: 10, status: "any" });
-    const exact = result.data.find((product) => normalizeText(product.name) === normalizeText(name));
+  if (!choice) {
+    return option;
+  }
 
-    if (exact) {
-      return { product: exact, matchedBySku: false };
+  return {
+    ...option,
+    option_group: String(option.option_group ?? "").trim() || choice.option_group,
+    color_name: name || choice.color_name,
+    color_hex: String(option.color_hex ?? "").trim() || choice.color_hex,
+    swatch_image_url: String(option.swatch_image_url ?? "").trim() || choice.swatch_image_url,
+    option_image_url: String(option.option_image_url ?? "").trim() || choice.option_image_url,
+    price_adjustment: price || choice.price_adjustment,
+    notes: String(option.notes ?? "").trim() || choice.notes
+  };
+}
+
+export function rowColourOptions(row: SheetProductRow) {
+  const value = productManagerSheetDetailValue(row, "colourBoard");
+  const json = safeJsonParse<ColourBoardOption>(value).filter((item) => item && typeof item === "object");
+
+  if (json.length > 0) {
+    return json.map(enrichColourBoardOption);
+  }
+
+  if (explicitBoolean(value) !== undefined) {
+    return [];
+  }
+
+  return pipeValues(value)
+    .filter((name) => !/^(?:error|no colou?r option)$/i.test(name))
+    .map((name) => enrichColourBoardOption({
+      option_group: "Personalise this item with coloured board",
+      color_name: name,
+      price_adjustment: "",
+      default_option: false
+    }));
+}
+
+export function mergeProductColourOptions(
+  expected: ColourBoardOption[],
+  scraped: ColourBoardOption[]
+) {
+  if (expected.length === 0) {
+    return scraped;
+  }
+
+  const scrapedByName = new Map(
+    scraped.map((option) => [normalizeText(String(option.color_name ?? "")), option])
+  );
+
+  return expected.map((option) => {
+    const enriched = enrichColourBoardOption(option);
+    const live = scrapedByName.get(normalizeText(String(enriched.color_name ?? "")));
+
+    if (!live) {
+      return enriched;
     }
 
-    if (result.data.length === 1) {
-      return { product: result.data[0], matchedBySku: false };
+    return {
+      ...enriched,
+      option_group: live.option_group || enriched.option_group,
+      color_name: live.color_name || enriched.color_name,
+      color_hex: live.color_hex || enriched.color_hex,
+      swatch_image_url: live.swatch_image_url || enriched.swatch_image_url,
+      option_image_url: live.option_image_url || enriched.option_image_url,
+      price_adjustment: live.price_adjustment || enriched.price_adjustment,
+      default_option: live.default_option ?? enriched.default_option,
+      notes: live.notes || enriched.notes
+    };
+  });
+}
+
+type AccessoryProductMatch = {
+  product: WooProduct;
+  matchedBy: "sku" | "name" | "url";
+};
+
+const accessoryMatchCache = new Map<string, {
+  expiresAt: number;
+  promise: Promise<AccessoryProductMatch | undefined>;
+}>();
+
+export function normalizeAccessoryName(value: string) {
+  return stripTags(value)
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+export function normalizeAccessorySku(value: string) {
+  return value.replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+export function normalizeAccessoryUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return `${url.hostname}${url.pathname}${url.search}`.replace(/\/+$/, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function preferredAccessoryProduct(products: WooProduct[]) {
+  const statusPriority: Record<string, number> = {
+    publish: 0,
+    private: 1,
+    pending: 2,
+    draft: 3
+  };
+
+  return [...products].sort(
+    (first, second) =>
+      (statusPriority[first.status] ?? 9) - (statusPriority[second.status] ?? 9) ||
+      second.id - first.id
+  )[0];
+}
+
+async function findAccessoryProductUncached(accessory: AccessoryItem) {
+  const name = String(accessory.name ?? "").trim();
+  const sku = String(accessory.sku ?? "").trim();
+  const sourceUrl = String(accessory.url ?? "").trim();
+
+  if (sku) {
+    const result = await getProducts({
+      sku,
+      perPage: 20,
+      status: "any",
+      fields: "id,name,sku,status,permalink"
+    });
+    const exactMatches = result.data.filter(
+      (product) => normalizeAccessorySku(product.sku) === normalizeAccessorySku(sku)
+    );
+    const product = preferredAccessoryProduct(exactMatches);
+
+    if (product) {
+      return { product, matchedBy: "sku" as const };
     }
   }
 
-  if (sku) {
-    const result = await getProducts({ sku, perPage: 10, status: "any" });
-    const exact = result.data.find((product) => normalizeText(product.sku) === normalizeText(sku));
+  if (name) {
+    const result = await getProducts({
+      search: name,
+      perPage: 50,
+      status: "any",
+      fields: "id,name,sku,status,permalink"
+    });
+    const exactMatches = result.data.filter(
+      (product) => normalizeAccessoryName(product.name) === normalizeAccessoryName(name)
+    );
+    const exact = preferredAccessoryProduct(exactMatches);
 
     if (exact) {
-      return { product: exact, matchedBySku: true };
+      return { product: exact, matchedBy: "name" as const };
     }
 
-    if (result.data.length === 1) {
-      return { product: result.data[0], matchedBySku: true };
+    const normalizedUrl = normalizeAccessoryUrl(sourceUrl);
+    const urlMatches = normalizedUrl
+      ? result.data.filter((product) => normalizeAccessoryUrl(product.permalink) === normalizedUrl)
+      : [];
+    const urlMatch = preferredAccessoryProduct(urlMatches);
+
+    if (urlMatch) {
+      return { product: urlMatch, matchedBy: "url" as const };
     }
   }
 
   return undefined;
 }
 
-export async function resolveAccessoryCrossSells(accessories: AccessoryItem[]) {
+async function findAccessoryProduct(accessory: AccessoryItem) {
+  const cacheKey = [
+    normalizeAccessorySku(String(accessory.sku ?? "")),
+    normalizeAccessoryName(String(accessory.name ?? "")),
+    normalizeAccessoryUrl(String(accessory.url ?? ""))
+  ].join("|");
+  const cached = accessoryMatchCache.get(cacheKey);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.promise;
+  }
+
+  const promise = findAccessoryProductUncached(accessory);
+  accessoryMatchCache.set(cacheKey, {
+    expiresAt: Date.now() + 5 * 60 * 1000,
+    promise
+  });
+  void promise.catch(() => {
+    if (accessoryMatchCache.get(cacheKey)?.promise === promise) {
+      accessoryMatchCache.delete(cacheKey);
+    }
+  });
+  void promise.then((match) => {
+    if (!match && accessoryMatchCache.get(cacheKey)?.promise === promise) {
+      accessoryMatchCache.delete(cacheKey);
+    }
+  });
+
+  return promise;
+}
+
+export async function resolveAccessoryCrossSells(
+  accessories: AccessoryItem[],
+  options: { excludeProductId?: number } = {}
+) {
   const ids: number[] = [];
   const linkedNames: string[] = [];
   const linkedSkus: string[] = [];
   const missing: string[] = [];
+  const results = await Promise.all(
+    accessories.map(async (accessory) => ({
+      accessory,
+      match: await findAccessoryProduct(accessory)
+    }))
+  );
 
-  for (const accessory of accessories) {
+  for (const { accessory, match } of results) {
     const name = String(accessory.name ?? "").trim();
     const sku = String(accessory.sku ?? "").trim();
 
@@ -440,16 +996,12 @@ export async function resolveAccessoryCrossSells(accessories: AccessoryItem[]) {
       continue;
     }
 
-    const match = await findAccessoryProduct(accessory);
-
-    if (match?.product) {
+    if (match?.product && match.product.id !== options.excludeProductId) {
       ids.push(match.product.id);
-      if (name) {
-        linkedNames.push(name);
-      }
-      if (match.matchedBySku && sku) {
-        linkedSkus.push(sku);
-      }
+      linkedNames.push(name || match.product.name);
+
+      const linkedSku = sku || match.product.sku;
+      if (linkedSku) linkedSkus.push(linkedSku);
     } else {
       missing.push(name || sku);
     }
@@ -567,6 +1119,15 @@ export function parseFeatureSpecifications(descriptionHtml: string) {
     .filter((spec) => spec.name);
 }
 
+export function removeFeatureSection(descriptionHtml: string) {
+  return descriptionHtml
+    .replace(
+      /<h([1-6])[^>]*>\s*(?:<[^>]+>\s*)*Features\s*:?\s*(?:<\/[^>]+>\s*)*<\/h\1>\s*(?:<ul[^>]*>[\s\S]*?<\/ul>|<ol[^>]*>[\s\S]*?<\/ol>)/gi,
+      ""
+    )
+    .trim();
+}
+
 function buildSpecificationGroups(descriptionHtml: string): SpecificationGroup[] {
   const specifications = parseFeatureSpecifications(descriptionHtml);
 
@@ -580,7 +1141,7 @@ function buildSpecificationGroups(descriptionHtml: string): SpecificationGroup[]
     : [];
 }
 
-function specificationMeta(groups: SpecificationGroup[]) {
+export function specificationMeta(groups: SpecificationGroup[]) {
   const meta: Array<{ key: string; value: unknown }> = [
     { key: "technical_specifications", value: JSON.stringify(groups) },
     { key: "_fcw_features_specification_count", value: groups[0]?.specifications.length ?? 0 },
@@ -609,24 +1170,54 @@ function specificationMeta(groups: SpecificationGroup[]) {
   return meta;
 }
 
-export async function buildProductCreateDraft(rowNumber: number) {
-  const row = await getProductSheetRow(rowNumber);
+export async function buildProductCreateDraft(
+  rowNumber: number,
+  source: ProductSheetSource = "product-manager",
+  options: { row?: SheetProductRow; categories?: WooCategory[] } = {}
+) {
+  const row = options.row ?? (source === "updated-list"
+    ? await getUpdatedListRow(rowNumber)
+    : await getProductSheetRow(rowNumber));
 
   if (!row) {
     throw new Error("Sheet row was not found.");
   }
 
   if (!row.liveUrl) {
-    throw new Error("This sheet row does not have a Live URL to scrape.");
+    throw new Error('This spreadsheet row does not have a "product -link" URL to scrape.');
   }
 
-  const [scraped, categories] = await Promise.all([scrapeLiveProduct(row.liveUrl), getCategories()]);
+  const [scraped, categories] = await Promise.all([
+    scrapeLiveProduct(row.liveUrl),
+    options.categories ? Promise.resolve(options.categories) : getCategories()
+  ]);
   const categoryResolution = resolveCategories(row, categories);
-  const accessories = rowAccessories(row);
-  const colourOptions = rowColourOptions(row);
+
+  if (categoryResolution.categoryIds.length === 0) {
+    const hierarchy = row.categoryHierarchy.map((category) => category.label).join(", ");
+    throw new Error(
+      hierarchy
+        ? `No WooCommerce category matches the spreadsheet hierarchy: ${hierarchy}. Product creation was stopped to prevent Uncategorized assignment.`
+        : "This spreadsheet row does not have a category hierarchy. Product creation was stopped to prevent Uncategorized assignment."
+    );
+  }
+
+  const sheetAccessories = rowAccessories(row);
+  const accessories = sheetAccessoriesExpected(row)
+    ? mergeProductAccessories(sheetAccessories, scraped.accessories)
+    : sheetAccessories;
+  const sheetColourOptions = rowColourOptions(row);
+  const colourOptions = sheetColourBoardExpected(row)
+    ? mergeProductColourOptions(sheetColourOptions, scraped.colourOptions)
+    : sheetColourOptions;
   const colourBoardPayload = buildColourBoardAcfPayload(colourOptions);
   const accessoryCrossSells = await resolveAccessoryCrossSells(accessories);
-  const specificationGroups = buildSpecificationGroups(scraped.descriptionHtml);
+  const spreadsheetSpecificationGroups = sheetSpecificationGroups(row);
+  const specificationGroups = spreadsheetSpecificationGroups.length > 0
+    ? spreadsheetSpecificationGroups
+    : buildSpecificationGroups(scraped.descriptionHtml);
+  const descriptionHtml = removeFeatureSection(scraped.descriptionHtml);
+  const descriptionText = stripTags(descriptionHtml);
   const productName = row.name || scraped.title;
   const regularPrice = sheetPrice(row) || scraped.price;
   const rawAccessoriesJson = accessories.length > 0 ? JSON.stringify(accessories) : "";
@@ -644,10 +1235,10 @@ export async function buildProductCreateDraft(rowNumber: number) {
     categories: categoryResolution.categoryIds.map((id) => ({ id })),
     cross_sell_ids: accessoryCrossSells.ids,
     images: scraped.images.map((src) => ({ src, alt: productName })),
-    short_description: scraped.descriptionText.slice(0, 300),
-    description: scraped.descriptionHtml,
+    short_description: descriptionText.slice(0, 300),
+    description: descriptionHtml,
     meta_data: [
-      { key: "_fcw_source", value: "product_sheet_validator" },
+      { key: "_fcw_source", value: source === "updated-list" ? "updated_list" : "product_sheet_validator" },
       { key: "_fcw_sheet_row", value: row.rowNumber },
       { key: "_fcw_live_url", value: row.liveUrl },
       { key: "_fcw_scraped_url", value: scraped.url },

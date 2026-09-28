@@ -6,7 +6,7 @@ import { getProduct } from "@/lib/woocommerce";
 
 type BulkStockMode = "add" | "set";
 type BulkStockStatus = "keep" | WooProduct["stock_status"];
-type BulkBackorders = "keep" | WooProduct["backorders"];
+type BulkBackorders = "keep" | NonNullable<WooProduct["backorders"]>;
 
 function isBulkStockStatus(value: unknown): value is BulkStockStatus {
   return value === "keep" || value === "instock" || value === "outofstock" || value === "onbackorder";

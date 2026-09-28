@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowLeft, ExternalLink, PencilLine } from "lucide-react";
+import { ArrowLeft, ExternalLink, PencilLine, RefreshCw, WifiOff } from "lucide-react";
 
 import ProductEditor from "@/components/product-editor";
 import PageHelp from "@/components/page-help";
@@ -14,7 +14,50 @@ export default async function ProductPage({
   params: Promise<{ id: string }> | { id: string };
 }) {
   const { id } = await params;
-  const [product, categories] = await Promise.all([getProduct(Number(id)), getCategories()]);
+  let product;
+  let categories;
+
+  try {
+    [product, categories] = await Promise.all([getProduct(Number(id)), getCategories()]);
+  } catch (error) {
+    const message = error instanceof Error
+      ? error.message
+      : "The product could not be loaded from WooCommerce. Please try again.";
+
+    return (
+      <main className="page">
+        <div className="page-head">
+          <div>
+            <Link className="button secondary" href="/">
+              <ArrowLeft size={17} />
+              Products
+            </Link>
+            <h1 className="page-title" style={{ marginTop: 14 }}>Product temporarily unavailable</h1>
+            <p className="page-copy">The editor could not connect to WooCommerce.</p>
+          </div>
+        </div>
+        <section className="product-filter-panel" style={{ display: "grid", gap: 14 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+            <WifiOff size={22} />
+            <div>
+              <h2 style={{ margin: 0 }}>Could not load this product</h2>
+              <p className="error" style={{ margin: "8px 0 0" }}>{message}</p>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Link className="button" href={`/products/${id}`}>
+              <RefreshCw size={16} />
+              Try again
+            </Link>
+            <Link className="button secondary" href="/">
+              <ArrowLeft size={16} />
+              Back to products
+            </Link>
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="page">

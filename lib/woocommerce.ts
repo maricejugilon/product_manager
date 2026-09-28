@@ -1,6 +1,7 @@
 import "server-only";
 
 import { isCategoryAncestor, normalizeCategoryName } from "@/lib/category-utils";
+import { friendlyNetworkError, networkErrorKind } from "@/lib/network-errors";
 import { getProductDuplicateSignals } from "@/lib/product-duplicates";
 import type {
   CategoryChanges,
@@ -19,6 +20,8 @@ type QueryValue = string | number | boolean | undefined | null;
 type GetProductsParams = {
   page?: number;
   perPage?: number;
+  orderby?: "date" | "id" | "include" | "title" | "slug" | "modified";
+  order?: "asc" | "desc";
   search?: string;
   sku?: string;
   category?: string;
@@ -30,6 +33,10 @@ type GetProductsParams = {
 };
 
 const requestDelayMs = Number(process.env.WOOCOMMERCE_REQUEST_DELAY_MS ?? (process.env.VERCEL ? 500 : 150));
+const configuredRequestTimeoutMs = Number(process.env.WOOCOMMERCE_REQUEST_TIMEOUT_MS ?? 30000);
+const requestTimeoutMs = Number.isFinite(configuredRequestTimeoutMs) && configuredRequestTimeoutMs >= 1000
+  ? configuredRequestTimeoutMs
+  : 30000;
 let nextRequestAt = 0;
 const customNotesCacheTtlMs = 5 * 60 * 1000;
 const customNotesProductCache = new Map<string, { expiresAt: number; products: WooProduct[] }>();
@@ -95,15 +102,37 @@ async function wcFetch<T>(
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     await waitForRequestSlot();
 
-    const response = await fetch(buildUrl(path, options.query), {
-      method: options.method ?? "GET",
-      headers: {
-        Authorization: `Basic ${auth}`,
-        "Content-Type": "application/json"
-      },
-      body: options.body ? JSON.stringify(options.body) : undefined,
-      cache: "no-store"
-    });
+    let response: Response;
+
+    try {
+      response = await fetch(buildUrl(path, options.query), {
+        method: options.method ?? "GET",
+        headers: {
+          Authorization: `Basic ${auth}`,
+          "Content-Type": "application/json"
+        },
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        cache: "no-store",
+        signal: AbortSignal.timeout(requestTimeoutMs)
+      });
+    } catch (error) {
+      const readOnlyRequest = !options.method || options.method === "GET";
+
+      if (process.env.WOOCOMMERCE_DEBUG_NETWORK_ERRORS === "1") {
+        console.warn("WooCommerce connection retry", {
+          attempt,
+          code: networkErrorKind(error),
+          path
+        });
+      }
+
+      if (readOnlyRequest && attempt < maxAttempts) {
+        await sleep(Math.min(5000, 500 * 2 ** (attempt - 1)));
+        continue;
+      }
+
+      throw friendlyNetworkError(error, "WooCommerce");
+    }
 
     if (response.ok) {
       return {
@@ -141,8 +170,8 @@ export async function getProducts(params: GetProductsParams) {
     query: {
       per_page: params.perPage ?? 100,
       page: params.page ?? 1,
-      orderby: "modified",
-      order: "desc",
+      orderby: params.orderby ?? "modified",
+      order: params.order ?? "desc",
       search: params.search,
       sku: params.sku,
       category: params.category,
