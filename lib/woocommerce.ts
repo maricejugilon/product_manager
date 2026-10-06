@@ -12,6 +12,9 @@ import type {
   WooCategory,
   WooGlobalAttribute,
   WooProduct,
+  WooStoreCurrency,
+  WooStoreTaxSettings,
+  WooTaxRate,
   WooProductVariation
 } from "@/lib/types";
 
@@ -41,6 +44,7 @@ let nextRequestAt = 0;
 const customNotesCacheTtlMs = 5 * 60 * 1000;
 const customNotesProductCache = new Map<string, { expiresAt: number; products: WooProduct[] }>();
 const attributeTermCache = new Map<number, { expiresAt: number; terms: WooAttributeTerm[] }>();
+let taxRateCache: { expiresAt: number; rates: WooTaxRate[] } | undefined;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -86,6 +90,45 @@ function buildUrl(path: string, query?: Record<string, QueryValue>) {
   });
 
   return url;
+}
+
+function buildStoreApiUrl(path: string, query?: Record<string, QueryValue>) {
+  const { storeUrl } = getConfig();
+  const url = new URL(`/wp-json/wc/store/v1${path}`, storeUrl);
+
+  Object.entries(query ?? {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  });
+
+  return url;
+}
+
+function fallbackCurrency(): WooStoreCurrency {
+  const configuredCode = process.env.WOOCOMMERCE_CURRENCY?.trim().toUpperCase();
+  const code = configuredCode && /^[A-Z]{3}$/.test(configuredCode) ? configuredCode : "GBP";
+  let symbol = code;
+
+  try {
+    symbol = new Intl.NumberFormat("en-GB", {
+      style: "currency",
+      currency: code,
+      currencyDisplay: "narrowSymbol"
+    }).formatToParts(0).find((part) => part.type === "currency")?.value ?? code;
+  } catch {
+    // The ISO code remains a safe display fallback.
+  }
+
+  return {
+    code,
+    symbol,
+    minorUnit: 2,
+    decimalSeparator: ".",
+    thousandSeparator: ",",
+    prefix: symbol,
+    suffix: ""
+  };
 }
 
 async function wcFetch<T>(
@@ -185,6 +228,91 @@ export async function getProducts(params: GetProductsParams) {
 
 export async function getProduct(id: number) {
   const { data } = await wcFetch<WooProduct>(`/products/${id}`);
+  return data;
+}
+
+export async function getStoreCurrency(): Promise<WooStoreCurrency> {
+  try {
+    const response = await fetch(buildStoreApiUrl("/products", {
+      per_page: 1,
+      _fields: "prices"
+    }), {
+      cache: "no-store",
+      signal: AbortSignal.timeout(requestTimeoutMs)
+    });
+
+    if (!response.ok) {
+      return fallbackCurrency();
+    }
+
+    const products = await response.json() as Array<{
+      prices?: {
+        currency_code?: string;
+        currency_symbol?: string;
+        currency_minor_unit?: number;
+        currency_decimal_separator?: string;
+        currency_thousand_separator?: string;
+        currency_prefix?: string;
+        currency_suffix?: string;
+      };
+    }>;
+    const prices = products[0]?.prices;
+    const code = prices?.currency_code?.trim().toUpperCase() ?? "";
+
+    if (!/^[A-Z]{3}$/.test(code)) {
+      return fallbackCurrency();
+    }
+
+    return {
+      code,
+      symbol: prices?.currency_symbol || code,
+      minorUnit: Number.isInteger(prices?.currency_minor_unit)
+        ? Number(prices?.currency_minor_unit)
+        : 2,
+      decimalSeparator: prices?.currency_decimal_separator || ".",
+      thousandSeparator: prices?.currency_thousand_separator || ",",
+      prefix: prices?.currency_prefix ?? prices?.currency_symbol ?? "",
+      suffix: prices?.currency_suffix ?? ""
+    };
+  } catch {
+    return fallbackCurrency();
+  }
+}
+
+export async function getStoreTaxSettings(): Promise<WooStoreTaxSettings> {
+  const fallback: WooStoreTaxSettings = {
+    pricesIncludeTax: process.env.WOOCOMMERCE_PRICES_INCLUDE_TAX === "yes",
+    displayShop: process.env.WOOCOMMERCE_TAX_DISPLAY_SHOP === "incl" ? "incl" : "excl",
+    displayCart: process.env.WOOCOMMERCE_TAX_DISPLAY_CART === "incl" ? "incl" : "excl"
+  };
+
+  try {
+    const { data } = await wcFetch<Array<{ id?: string; value?: unknown }>>("/settings/tax");
+    const value = (id: string) => String(data.find((item) => item.id === id)?.value ?? "");
+
+    return {
+      pricesIncludeTax: value("woocommerce_prices_include_tax") === "yes",
+      displayShop: value("woocommerce_tax_display_shop") === "incl" ? "incl" : "excl",
+      displayCart: value("woocommerce_tax_display_cart") === "incl" ? "incl" : "excl"
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+export async function getTaxRates() {
+  if (taxRateCache && taxRateCache.expiresAt > Date.now()) {
+    return taxRateCache.rates;
+  }
+
+  const { data } = await wcFetch<WooTaxRate[]>("/taxes", {
+    query: { per_page: 100 }
+  });
+  taxRateCache = {
+    expiresAt: Date.now() + 5 * 60 * 1000,
+    rates: data
+  };
+
   return data;
 }
 

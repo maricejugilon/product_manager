@@ -1,10 +1,30 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Circle, ExternalLink, FileSpreadsheet, LoaderCircle, PackagePlus, RefreshCw, SquarePen, XCircle, Wrench } from "lucide-react";
 
+import UpdatedListPriceSync, { type PriceSyncRow } from "@/components/updated-list-price-sync";
+import UpdatedListQaChecks from "@/components/updated-list-qa-checks";
+import UpdatedListStockSync, { type StockSyncRow } from "@/components/updated-list-stock-sync";
+import type { ProductSheetQaCheck } from "@/lib/product-sheet-qa";
+import type { WooStoreCurrency, WooStoreTaxSettings } from "@/lib/types";
+import { loadSharedWorkflow, saveSharedWorkflow } from "@/lib/updated-list-workflow-client";
+
 type FieldFix = "custom_notes" | "colour_board" | "accessories" | "specifications";
+export type UpdatedListTab = "list" | "missing" | "drafts" | "mismatches" | "specifications" | "qa" | "prices" | "stocks";
+
+const refreshLabels: Record<UpdatedListTab, string> = {
+  list: "all Updated List data",
+  missing: "missing products",
+  drafts: "draft products",
+  mismatches: "field fixes",
+  specifications: "specifications",
+  qa: "QA checks",
+  prices: "price product data",
+  stocks: "stock product data"
+};
 
 type FieldFixProgress = {
   progress: number;
@@ -79,42 +99,78 @@ type UpdatedListRow = {
   rowNumber: number;
   sheetRowNumber: number;
   name: string;
-  sourceName: string;
   wooId?: number;
   wooPermalink?: string;
   wooMatch: boolean;
   wooStatus: string;
   ambiguousMatch: boolean;
+  wooMatches?: Array<{
+    id: number;
+    name: string;
+    sku: string;
+    status: string;
+    permalink?: string;
+  }>;
   customNotesExpected: boolean;
   colourBoardExpected: boolean;
   accessoriesExpected: boolean;
-  accessoriesExpectedCount: number;
   specificationsExpected: boolean;
   specificationsFeature: string;
   customNotesPresent: boolean;
   colourBoardPresent: boolean;
   accessoriesPresent: boolean;
-  accessoriesPresentCount: number;
   specificationsPresent: boolean;
+  qaCustomNotes: ProductSheetQaCheck;
+  qaAccessories: ProductSheetQaCheck;
+  qaColour: ProductSheetQaCheck;
+};
+
+type UpdatedListSummary = {
+  missing: number;
+  drafts: number;
+  fieldFixes: number;
+  specifications: number;
+  qaFailures: number;
+  priceChecks: number;
+  stockChecks: number;
+  missingFields: {
+    customNotes: number;
+    colourBoard: number;
+    accessories: number;
+  };
 };
 
 export default function UpdatedListActions({
   rows,
+  priceRows,
+  stockRows,
+  currency,
+  tax,
   updatedAt,
-  draftCount,
-  wooStoreUrl
+  summary,
+  wooStoreUrl,
+  sharedStorage,
+  initialTab = "list"
 }: {
   rows: UpdatedListRow[];
+  priceRows: PriceSyncRow[];
+  stockRows: StockSyncRow[];
+  currency: WooStoreCurrency;
+  tax: WooStoreTaxSettings;
   updatedAt: string;
-  draftCount: number;
+  summary: UpdatedListSummary;
   wooStoreUrl: string;
+  sharedStorage: "upstash" | "local";
+  initialTab?: UpdatedListTab;
 }) {
-  const [activeTab, setActiveTab] = useState<"list" | "missing" | "drafts" | "mismatches" | "specifications">("list");
+  const router = useRouter();
+  const [activeTab, setActiveTab] = useState<UpdatedListTab>(initialTab);
+  const [isChangingTab, setIsChangingTab] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshProgress, setRefreshProgress] = useState(0);
   const [messaging, setMessaging] = useState("");
   const [error, setError] = useState("");
-  const [statusTab, setStatusTab] = useState<"list" | "missing" | "drafts" | "mismatches" | "specifications">("list");
+  const [statusTab, setStatusTab] = useState<UpdatedListTab>("list");
   const [busyRows, setBusyRows] = useState<Set<number>>(new Set());
   const [busyFixes, setBusyFixes] = useState<Record<string, boolean>>({});
   const [fieldFixProgress, setFieldFixProgress] = useState<Record<number, FieldFixProgress>>({});
@@ -123,6 +179,7 @@ export default function UpdatedListActions({
   const [mismatchBatchItems, setMismatchBatchItems] = useState<MismatchBatchItem[]>([]);
   const [specificationBatchItems, setSpecificationBatchItems] = useState<MismatchBatchItem[]>([]);
   const [missingProductBatchItems, setMissingProductBatchItems] = useState<MissingProductBatchItem[]>([]);
+  const [sharedWorkflowStorage, setSharedWorkflowStorage] = useState<"loading" | "upstash" | "local" | "error">("loading");
   const [batchProgress, setBatchProgress] = useState<{
     mode: "draft";
     total: number;
@@ -153,6 +210,11 @@ export default function UpdatedListActions({
   const specificationBatchItemsRef = useRef<MismatchBatchItem[]>([]);
   const missingProductBatchItemsRef = useRef<MissingProductBatchItem[]>([]);
 
+  useEffect(() => {
+    setActiveTab(initialTab);
+    setIsChangingTab(false);
+  }, [initialTab]);
+
   function wooProductUrl(productId?: number, permalink?: string) {
     if (permalink) {
       return permalink;
@@ -176,6 +238,9 @@ export default function UpdatedListActions({
     mismatchBatchItemsRef.current = items;
     setMismatchBatchItems(items);
     window.localStorage.setItem(mismatchBatchStorageKey, JSON.stringify(items));
+    void saveSharedWorkflow("field-fixes", items)
+      .then((payload) => setSharedWorkflowStorage(payload.storage || "local"))
+      .catch(() => setSharedWorkflowStorage("error"));
   }
 
   function updateMismatchBatchItem(id: string, changes: Partial<MismatchBatchItem>) {
@@ -188,6 +253,9 @@ export default function UpdatedListActions({
     specificationBatchItemsRef.current = items;
     setSpecificationBatchItems(items);
     window.localStorage.setItem(specificationBatchStorageKey, JSON.stringify(items));
+    void saveSharedWorkflow("specifications", items)
+      .then((payload) => setSharedWorkflowStorage(payload.storage || "local"))
+      .catch(() => setSharedWorkflowStorage("error"));
   }
 
   function updateSpecificationBatchItem(id: string, changes: Partial<MismatchBatchItem>) {
@@ -200,6 +268,9 @@ export default function UpdatedListActions({
     missingProductBatchItemsRef.current = items;
     setMissingProductBatchItems(items);
     window.localStorage.setItem(missingProductBatchStorageKey, JSON.stringify(items));
+    void saveSharedWorkflow("missing-products", items)
+      .then((payload) => setSharedWorkflowStorage(payload.storage || "local"))
+      .catch(() => setSharedWorkflowStorage("error"));
   }
 
   function updateMissingProductBatchItem(id: string, changes: Partial<MissingProductBatchItem>) {
@@ -335,6 +406,107 @@ export default function UpdatedListActions({
     }
   }, []);
 
+  useEffect(() => {
+    let active = true;
+
+    async function hydrateSharedWorkflows() {
+      try {
+        const [mismatchResult, specificationResult, missingResult] = await Promise.all([
+          loadSharedWorkflow<MismatchBatchItem>("field-fixes"),
+          loadSharedWorkflow<MismatchBatchItem>("specifications"),
+          loadSharedWorkflow<MissingProductBatchItem>("missing-products")
+        ]);
+        if (!active) return;
+
+        setSharedWorkflowStorage(
+          mismatchResult.storage === "upstash" &&
+          specificationResult.storage === "upstash" &&
+          missingResult.storage === "upstash"
+            ? "upstash"
+            : "local"
+        );
+
+        if (mismatchResult.state) {
+          const isRecent = Date.now() - Date.parse(mismatchResult.state.updatedAt) < 2 * 60 * 1000;
+          const usedIds = new Set<string>();
+          const restored = mismatchResult.state.items.map((item, index) => {
+            let id = item.id || `shared-mismatch-${item.rowNumber}-${index}`;
+            if (usedIds.has(id)) id = `${id}-duplicate-${index}`;
+            usedIds.add(id);
+            return item.status === "processing" && !isRecent
+              ? { ...item, id, status: "pending" as const, message: "Interrupted and ready to resume." }
+              : { ...item, id };
+          });
+          const processed = restored.filter((item) => item.status === "completed" || item.status === "failed").length;
+          mismatchBatchItemsRef.current = restored;
+          setMismatchBatchItems(restored);
+          window.localStorage.setItem(mismatchBatchStorageKey, JSON.stringify(restored));
+          if (restored.some((item) => item.status === "pending")) {
+            setMismatchBatchProgress({ total: restored.length, current: processed, paused: false, stopped: true });
+          }
+        } else if (mismatchBatchItemsRef.current.length) {
+          void saveSharedWorkflow("field-fixes", mismatchBatchItemsRef.current);
+        }
+
+        if (specificationResult.state) {
+          const isRecent = Date.now() - Date.parse(specificationResult.state.updatedAt) < 2 * 60 * 1000;
+          const restored = specificationResult.state.items.map((item, index) => ({
+            ...item,
+            id: item.id || `shared-specification-${item.rowNumber}-${index}`,
+            fields: ["specifications" as const],
+            ...(item.status === "processing" && !isRecent
+              ? { status: "pending" as const, message: "Interrupted and ready to resume." }
+              : {})
+          }));
+          const processed = restored.filter((item) => item.status === "completed" || item.status === "failed").length;
+          specificationBatchItemsRef.current = restored;
+          setSpecificationBatchItems(restored);
+          window.localStorage.setItem(specificationBatchStorageKey, JSON.stringify(restored));
+          if (restored.some((item) => item.status === "pending")) {
+            setSpecificationBatchProgress({ total: restored.length, current: processed, paused: false, stopped: true });
+          }
+        } else if (specificationBatchItemsRef.current.length) {
+          void saveSharedWorkflow("specifications", specificationBatchItemsRef.current);
+        }
+
+        if (missingResult.state) {
+          const isRecent = Date.now() - Date.parse(missingResult.state.updatedAt) < 2 * 60 * 1000;
+          const currentByRow = new Map(missingProductBatchItemsRef.current.map((item) => [item.rowNumber, item]));
+          const restoredByRow = new Map<number, MissingProductBatchItem>();
+
+          missingResult.state.items.forEach((item) => {
+            const current = currentByRow.get(item.rowNumber);
+            const restored = item.status === "processing" && !isRecent
+              ? { ...item, id: `missing-${item.rowNumber}`, status: "pending" as const, message: "Interrupted and ready to resume." }
+              : { ...item, id: `missing-${item.rowNumber}` };
+            restoredByRow.set(item.rowNumber, current?.status === "completed" ? current : restored);
+          });
+          currentByRow.forEach((item, rowNumber) => {
+            if (!restoredByRow.has(rowNumber) && item.status === "completed") restoredByRow.set(rowNumber, item);
+          });
+
+          const restored = [...restoredByRow.values()];
+          const processed = restored.filter((item) => item.status === "completed" || item.status === "failed").length;
+          missingProductBatchItemsRef.current = restored;
+          setMissingProductBatchItems(restored);
+          window.localStorage.setItem(missingProductBatchStorageKey, JSON.stringify(restored));
+          if (restored.some((item) => item.status === "pending")) {
+            setMissingProductBatchProgress({ total: restored.length, current: processed, paused: false, stopped: true });
+          }
+        } else if (missingProductBatchItemsRef.current.length) {
+          void saveSharedWorkflow("missing-products", missingProductBatchItemsRef.current);
+        }
+      } catch {
+        if (active) setSharedWorkflowStorage("error");
+      }
+    }
+
+    void hydrateSharedWorkflows();
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const missingRows = useMemo(
     () => rows.filter((row) => !row.wooMatch),
     [rows]
@@ -358,6 +530,10 @@ export default function UpdatedListActions({
   );
 
   useEffect(() => {
+    if (initialTab !== "missing" && initialTab !== "drafts") {
+      return;
+    }
+
     let cancelled = false;
 
     async function hydrateQueuedProducts() {
@@ -399,7 +575,7 @@ export default function UpdatedListActions({
     return () => {
       cancelled = true;
     };
-  }, [eligibleMissingRows]);
+  }, [eligibleMissingRows, initialTab]);
 
   const draftRows = useMemo(
     () => rows.filter((row) => row.wooMatch && !row.ambiguousMatch && row.wooStatus === "draft"),
@@ -439,7 +615,10 @@ export default function UpdatedListActions({
     ),
     [rows]
   );
-
+  const qaRows = useMemo(
+    () => rows.filter((row) => row.qaCustomNotes.failed || row.qaAccessories.failed || row.qaColour.failed),
+    [rows]
+  );
   function getMismatchFields(row: UpdatedListRow) {
     return [
       { key: "custom_notes" as const, label: "Custom notes", mismatch: row.customNotesExpected && !row.customNotesPresent },
@@ -448,12 +627,26 @@ export default function UpdatedListActions({
     ].filter((field) => field.mismatch);
   }
 
+  function selectTab(tab: UpdatedListTab) {
+    if (tab === activeTab || isChangingTab) return;
+
+    setIsChangingTab(true);
+
+    const url = new URL(window.location.href);
+    if (tab === "list") {
+      url.searchParams.delete("tab");
+    } else {
+      url.searchParams.set("tab", tab);
+    }
+    router.replace(`${url.pathname}${url.search}`);
+  }
+
   async function refreshData() {
     let progressTimer: ReturnType<typeof setInterval> | undefined;
     let reloadStarted = false;
 
     setIsRefreshing(true);
-    setStatusTab("list");
+    setStatusTab(activeTab);
     setRefreshProgress(5);
     setError("");
     setMessaging("");
@@ -467,6 +660,8 @@ export default function UpdatedListActions({
 
       const response = await fetch("/api/updated-list/refresh", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: activeTab }),
         cache: "no-store"
       });
       const payload = await readJsonResponse<{ error?: string }>(response);
@@ -1271,6 +1466,7 @@ export default function UpdatedListActions({
   const failedMismatchItems = mismatchBatchItems.filter((item) => item.status === "failed").length;
   const failedSpecificationItems = specificationBatchItems.filter((item) => item.status === "failed").length;
   const failedMissingProductItems = missingProductBatchItems.filter((item) => item.status === "failed").length;
+  const draftBatchRunning = Boolean(batchProgress && !batchProgress.stopped);
   const mismatchBatchRunning = Boolean(mismatchBatchProgress && !mismatchBatchProgress.stopped);
   const specificationBatchRunning = Boolean(
     specificationBatchProgress && !specificationBatchProgress.stopped
@@ -1278,6 +1474,13 @@ export default function UpdatedListActions({
   const missingProductBatchRunning = Boolean(
     missingProductBatchProgress && !missingProductBatchProgress.stopped
   );
+  const tabNavigationDisabled =
+    isChangingTab ||
+    isRefreshing ||
+    draftBatchRunning ||
+    mismatchBatchRunning ||
+    specificationBatchRunning ||
+    missingProductBatchRunning;
   const visibleBatchProgress = activeTab === "mismatches"
     ? mismatchBatchProgress
       ? { ...mismatchBatchProgress, mode: "mismatch" as const }
@@ -1316,7 +1519,10 @@ export default function UpdatedListActions({
           <div>
             <h2 style={{ margin: 0 }}>Review & create actions</h2>
             <span>
-              {missingRows.length} missing products | {draftCount} drafts | {mismatchRows.length} field fixes | {specificationRows.length} specifications missing
+              {summary.missing} missing products | {summary.drafts} drafts | {summary.fieldFixes} field fixes | {summary.specifications} specifications missing | {summary.qaFailures} QA failures | {summary.priceChecks} live price checks
+            </span>
+            <span className={sharedWorkflowStorage === "error" ? "has-error" : undefined}>
+              Data cache: {sharedStorage === "upstash" ? "Shared Upstash" : "Local development"} | Workflows: {sharedWorkflowStorage === "upstash" ? "Shared Upstash" : sharedWorkflowStorage === "local" ? "Local development" : sharedWorkflowStorage === "error" ? "Not shared" : "Connecting"}
             </span>
           </div>
         </div>
@@ -1325,23 +1531,23 @@ export default function UpdatedListActions({
           type="button"
           disabled={
             isRefreshing ||
-            Boolean(batchProgress) ||
+            draftBatchRunning ||
             mismatchBatchRunning ||
             specificationBatchRunning ||
             missingProductBatchRunning
           }
           onClick={() => void refreshData()}
-          title={`Refresh cached data from ${updatedAt}`}
+          title={`Refresh ${refreshLabels[activeTab]} from the spreadsheet and WooCommerce. Cached at ${updatedAt}`}
         >
           <RefreshCw size={15} />
-          {isRefreshing ? "Refreshing" : "Refresh data"}
+          {isRefreshing ? "Refreshing" : activeTab === "list" ? "Refresh all data" : `Refresh ${refreshLabels[activeTab]}`}
         </button>
       </div>
 
       {isRefreshing ? (
         <div style={{ display: "grid", gap: 7, marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 13 }}>
-            <span>Refreshing live product data...</span>
+            <span>Refreshing {refreshLabels[activeTab]}...</span>
             <strong>{refreshProgress}%</strong>
           </div>
           <div
@@ -1369,26 +1575,39 @@ export default function UpdatedListActions({
           { id: "list", label: "Overview" },
           {
             id: "missing",
-            label: `Missing products (${missingRows.length})${missingProductBatchProgress?.stopped ? " - stopped" : missingProductBatchProgress ? ` ${missingProductBatchProgress.current}/${missingProductBatchProgress.total}` : ""}`
+            label: `Missing products (${summary.missing})${missingProductBatchProgress?.stopped ? " - stopped" : missingProductBatchProgress ? ` ${missingProductBatchProgress.current}/${missingProductBatchProgress.total}` : ""}`
           },
           {
             id: "drafts",
-            label: `Draft products (${draftRows.length})${batchProgress?.mode === "draft" ? ` ${batchProgress.current}/${batchProgress.total}` : ""}`
+            label: `Draft products (${summary.drafts})${batchProgress?.mode === "draft" ? ` ${batchProgress.current}/${batchProgress.total}` : ""}`
           },
           {
             id: "mismatches",
-            label: `Field fixes (${mismatchRows.length})${mismatchBatchProgress?.stopped ? " - stopped" : mismatchBatchProgress ? ` ${mismatchBatchProgress.current}/${mismatchBatchProgress.total}` : ""}`
+            label: `Field fixes (${summary.fieldFixes})${mismatchBatchProgress?.stopped ? " - stopped" : mismatchBatchProgress ? ` ${mismatchBatchProgress.current}/${mismatchBatchProgress.total}` : ""}`
           },
           {
             id: "specifications",
-            label: `Specifications missing (${specificationRows.length})${specificationBatchProgress ? ` ${specificationBatchProgress.current}/${specificationBatchProgress.total}` : ""}`
+            label: `Specifications missing (${summary.specifications})${specificationBatchProgress ? ` ${specificationBatchProgress.current}/${specificationBatchProgress.total}` : ""}`
+          },
+          {
+            id: "prices",
+            label: `Live prices (${summary.priceChecks})`
+          },
+          {
+            id: "stocks",
+            label: `Live stock (${summary.stockChecks})`
+          },
+          {
+            id: "qa",
+            label: `QA checks (${summary.qaFailures})`
           }
         ].map((tab) => (
           <button
             key={tab.id}
             className="button secondary compact-button"
             type="button"
-            onClick={() => setActiveTab(tab.id as "list" | "missing" | "drafts" | "mismatches" | "specifications")}
+            disabled={tabNavigationDisabled && activeTab !== tab.id}
+            onClick={() => selectTab(tab.id as UpdatedListTab)}
             style={{
               opacity: activeTab === tab.id ? 1 : 0.8,
               borderColor: activeTab === tab.id ? "#2563eb" : undefined,
@@ -1426,13 +1645,13 @@ export default function UpdatedListActions({
                 disabled={
                   isRefreshing ||
                   Boolean(visibleBatchProgress && !visibleBatchProgress.stopped) ||
-                  Boolean(batchProgress && activeTab !== "drafts") ||
+                  (draftBatchRunning && activeTab !== "drafts") ||
                   (activeTab === "mismatches" && (missingProductBatchRunning || specificationBatchRunning)) ||
                   (activeTab === "specifications" && (missingProductBatchRunning || mismatchBatchRunning)) ||
                   (activeTab === "missing" && (mismatchBatchRunning || specificationBatchRunning))
                 }
                 onClick={() => void refreshData()}
-                title="Refresh spreadsheet and WooCommerce data without clearing the saved bulk queue"
+                title={`Refresh ${refreshLabels[activeTab]} without clearing the saved bulk queue`}
               >
                 <RefreshCw size={14} />
                 {isRefreshing ? "Refreshing" : "Refresh bulk data"}
@@ -1442,7 +1661,7 @@ export default function UpdatedListActions({
                   <button
                     className="button secondary compact-button"
                     disabled={
-                      Boolean(batchProgress && visibleBatchProgress.mode !== "draft") ||
+                      (draftBatchRunning && visibleBatchProgress.mode !== "draft") ||
                       (visibleBatchProgress.mode === "mismatch" && (missingProductBatchRunning || specificationBatchRunning)) ||
                       (visibleBatchProgress.mode === "specification" && (missingProductBatchRunning || mismatchBatchRunning)) ||
                       (visibleBatchProgress.mode === "missing" && (mismatchBatchRunning || specificationBatchRunning))
@@ -1483,7 +1702,7 @@ export default function UpdatedListActions({
                     type="button"
                     disabled={
                       visibleBatchProgress.stopped ||
-                      Boolean(batchProgress && visibleBatchProgress.mode !== "draft") ||
+                      (draftBatchRunning && visibleBatchProgress.mode !== "draft") ||
                       (visibleBatchProgress.mode === "mismatch" && (missingProductBatchRunning || specificationBatchRunning)) ||
                       (visibleBatchProgress.mode === "specification" && (missingProductBatchRunning || mismatchBatchRunning)) ||
                       (visibleBatchProgress.mode === "missing" && (mismatchBatchRunning || specificationBatchRunning))
@@ -1680,26 +1899,68 @@ export default function UpdatedListActions({
           </p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
             <div style={{ border: "1px solid #dbe2ea", borderRadius: 10, padding: 12 }}>
-              <strong>{missingRows.length}</strong>
+              <strong>{summary.missing}</strong>
               <p style={{ margin: "6px 0 0", color: "#52607a" }}>Missing products</p>
             </div>
             <div style={{ border: "1px solid #dbe2ea", borderRadius: 10, padding: 12 }}>
-              <strong>{draftCount}</strong>
+              <strong>{summary.drafts}</strong>
               <p style={{ margin: "6px 0 0", color: "#52607a" }}>Drafts in WooCommerce</p>
             </div>
             <div style={{ border: "1px solid #dbe2ea", borderRadius: 10, padding: 12 }}>
-              <strong>{mismatchRows.length}</strong>
+              <strong>{summary.fieldFixes}</strong>
               <p style={{ margin: "6px 0 0", color: "#52607a" }}>Products with missing required fields</p>
               <p style={{ margin: "4px 0 0", color: "#52607a", fontSize: 12 }}>
-                Notes {missingFieldCounts.customNotes}, Colour {missingFieldCounts.colourBoard}, Accessories {missingFieldCounts.accessories}
+                Notes {summary.missingFields.customNotes}, Colour {summary.missingFields.colourBoard}, Accessories {summary.missingFields.accessories}
               </p>
             </div>
             <div style={{ border: "1px solid #dbe2ea", borderRadius: 10, padding: 12 }}>
-              <strong>{specificationRows.length}</strong>
+              <strong>{summary.specifications}</strong>
               <p style={{ margin: "6px 0 0", color: "#52607a" }}>Products missing specifications</p>
+            </div>
+            <div style={{ border: "1px solid #dbe2ea", borderRadius: 10, padding: 12 }}>
+              <strong>{summary.qaFailures}</strong>
+              <p style={{ margin: "6px 0 0", color: "#52607a" }}>Products with failed spreadsheet QA checks</p>
+            </div>
+            <div style={{ border: "1px solid #dbe2ea", borderRadius: 10, padding: 12 }}>
+              <strong>{summary.priceChecks}</strong>
+              <p style={{ margin: "6px 0 0", color: "#52607a" }}>Product-link prices available to scrape and compare</p>
             </div>
           </div>
         </div>
+      ) : null}
+
+      {activeTab === "qa" ? (
+        <UpdatedListQaChecks rows={qaRows} />
+      ) : null}
+
+      {activeTab === "prices" ? (
+        <UpdatedListPriceSync
+          rows={priceRows}
+          currency={currency}
+          tax={tax}
+          updatedAt={updatedAt}
+          disabled={
+            isRefreshing ||
+            draftBatchRunning ||
+            mismatchBatchRunning ||
+            specificationBatchRunning ||
+            missingProductBatchRunning
+          }
+        />
+      ) : null}
+
+      {activeTab === "stocks" ? (
+        <UpdatedListStockSync
+          rows={stockRows}
+          updatedAt={updatedAt}
+          disabled={
+            isRefreshing ||
+            draftBatchRunning ||
+            mismatchBatchRunning ||
+            specificationBatchRunning ||
+            missingProductBatchRunning
+          }
+        />
       ) : null}
 
       {activeTab === "missing" ? (
@@ -1717,7 +1978,7 @@ export default function UpdatedListActions({
                   disabled={
                     creatableMissingRows.length === 0 ||
                     busyRows.size > 0 ||
-                    Boolean(batchProgress) ||
+                    draftBatchRunning ||
                     mismatchBatchRunning ||
                     specificationBatchRunning ||
                     Boolean(missingProductBatchProgress)

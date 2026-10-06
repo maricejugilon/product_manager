@@ -44,16 +44,18 @@ Because WooCommerce API keys can update store data, rotate the keys if they have
 
 ## Runtime Storage
 
-Local development stores review and validator cache JSON in `data/`.
+Local development stores review and validator cache JSON in `data/` when Redis credentials are not configured.
 
-Production review storage must be shared because Vercel functions can run in different instances or regions for different users. Configure Vercel KV or Upstash Redis REST with:
+Production review storage and all durable Updated List state must be shared because Vercel functions can run in different instances or regions for different users. Configure Vercel KV or Upstash Redis REST with:
 
 ```text
 KV_REST_API_URL
 KV_REST_API_TOKEN
 ```
 
-The app also accepts `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`. Without shared review storage in Vercel, review creation and approval can land on different function instances, causing "Review not found" during approval. Approval requests use a short Redis lock so two users cannot publish the same review at the same time.
+The app also accepts `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`. Redis stores the Review Queue, the cached spreadsheet/WooCommerce comparison, Live price and stock checks, and the field-fix, specification, missing-product, price-update, and stock-update workflow histories. Without shared storage in Vercel, these results cannot be kept consistent between browsers. Approval requests use a short Redis lock so two users cannot publish the same review at the same time.
+
+Live price and stock checks are stored per spreadsheet row. The cache defaults to the `shared` namespace, so local, staging, and production use the same results when they point to the same Upstash database. `UPDATED_LIST_CACHE_NAMESPACE` is optional; set different values only when you want to isolate environments later.
 
 ## WooCommerce Rate Limits
 

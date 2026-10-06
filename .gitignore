@@ -13,9 +13,7 @@ dist
 !.env.example
 
 # local app data and review/cache state
-data/reviews.json
-data/product-sheet-validator-cache.json
-data/product-sheet-validator-cache-sync.json
+data/
 
 # AI agent / local workspace artifacts
 .codex
@@ -26,6 +24,9 @@ data/product-sheet-validator-cache-sync.json
 *.diff
 scripts/start-next.cmd
 scripts/start-dev-hidden.vbs
+scripts/debug-product-row.mjs
+AGENTS.md
+CLAUDE.md
 
 # logs
 npm-debug.log*

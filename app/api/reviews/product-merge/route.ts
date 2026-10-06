@@ -5,7 +5,7 @@ import {
   getProductDetailMatches,
   getProductDuplicateSignals
 } from "@/lib/product-duplicates";
-import { createReview } from "@/lib/review-store";
+import { createReview, listReviews } from "@/lib/review-store";
 import { getProduct } from "@/lib/woocommerce";
 
 export async function POST(request: Request) {
@@ -27,6 +27,20 @@ export async function POST(request: Request) {
 
     if (sourceId === targetId) {
       return NextResponse.json({ error: "Source and target products must be different." }, { status: 400 });
+    }
+
+    const existing = (await listReviews()).find((review) => {
+      const changes = review.changes as { mode?: string; sourceId?: number; targetId?: number };
+      return review.resource === "product_merge" &&
+        review.action === "merge" &&
+        (review.status === "pending" || review.status === "failed") &&
+        changes.mode === mode &&
+        changes.sourceId === sourceId &&
+        changes.targetId === targetId;
+    });
+
+    if (existing) {
+      return NextResponse.json({ ...existing, alreadyExists: true });
     }
 
     const [source, target] = await Promise.all([getProduct(sourceId), getProduct(targetId)]);

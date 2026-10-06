@@ -1,6 +1,7 @@
 import "server-only";
 
 import { COLOUR_BOARD_CHOICES } from "@/lib/colour-board-choices";
+import { friendlyNetworkError } from "@/lib/network-errors";
 import {
   getProductSheetRow,
   getUpdatedListRow,
@@ -11,13 +12,17 @@ import {
 import type { ProductChanges, WooCategory, WooProduct } from "@/lib/types";
 import { getCategories, getProducts } from "@/lib/woocommerce";
 
-type ScrapedProductData = {
+export type ScrapedProductData = {
   url: string;
   title: string;
   descriptionHtml: string;
   descriptionText: string;
   sku: string;
   price: string;
+  priceExVat: string;
+  vatAmount: string;
+  vatRate: string;
+  priceCurrency: string;
   stockStatus?: ProductChanges["stock_status"];
   images: string[];
   colourOptions: ColourBoardOption[];
@@ -288,22 +293,78 @@ function parseMoney(value: string) {
   return parsed && Number.isFinite(Number(parsed)) ? Number(parsed).toFixed(2) : "";
 }
 
+function productVatPrices(html: string) {
+  const pricesSection = html.match(
+    /<div[^>]+id=["']prodPrices["'][^>]*>([\s\S]*?)<!--\s*#prodPrices\s*-->/i
+  )?.[1] ?? html;
+  const inclusiveMarkup = pricesSection.match(
+    /<span[^>]+class=["'][^"']*\bactual-price\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i
+  )?.[1] ?? "";
+  const exclusiveMarkup = pricesSection.match(
+    /<span[^>]+class=["'][^"']*\bex-vat-price\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i
+  )?.[1] ?? "";
+  const price = parseMoney(stripTags(inclusiveMarkup));
+  const priceExVat = parseMoney(stripTags(exclusiveMarkup));
+  const inclusiveAmount = Number(price);
+  const exclusiveAmount = Number(priceExVat);
+  const vatAmount = price && priceExVat && inclusiveAmount >= exclusiveAmount
+    ? (inclusiveAmount - exclusiveAmount).toFixed(2)
+    : "";
+  const vatRate = vatAmount && exclusiveAmount > 0
+    ? ((Number(vatAmount) / exclusiveAmount) * 100).toFixed(2)
+    : "";
+
+  return { price, priceExVat, vatAmount, vatRate };
+}
+
 function statusFromAvailability(value: string): ProductChanges["stock_status"] | undefined {
   const normalized = normalizeText(value);
 
-  if (normalized.includes("instock") || normalized.includes("in stock")) {
-    return "instock";
-  }
-
-  if (normalized.includes("outofstock") || normalized.includes("out of stock")) {
+  if (
+    /\b0+\s+in stock\b/.test(normalized) ||
+    normalized.includes("outofstock") ||
+    normalized.includes("out of stock") ||
+    normalized.includes("soldout") ||
+    normalized.includes("sold out") ||
+    normalized.includes("discontinued") ||
+    normalized.includes("currently unavailable")
+  ) {
     return "outofstock";
   }
 
-  if (normalized.includes("backorder")) {
+  if (
+    normalized.includes("backorder") ||
+    normalized.includes("preorder") ||
+    normalized.includes("pre order") ||
+    normalized.includes("available to order") ||
+    normalized.includes("made to order")
+  ) {
     return "onbackorder";
   }
 
+  if (
+    normalized.includes("instock") ||
+    normalized.includes("in stock") ||
+    normalized.includes("limitedavailability") ||
+    normalized.includes("limited availability")
+  ) {
+    return "instock";
+  }
+
   return undefined;
+}
+
+function productStockStatus(html: string, offerAvailability: unknown) {
+  const availabilityElement = html.match(
+    /<[^>]*(?:itemprop|item-prop)=["']availability["'][^>]*>([\s\S]*?)<\/[^>]+>/i
+  )?.[1];
+  const stockClassElement = html.match(
+    /<[^>]*class=["'][^"']*(?:in_stock|out_of_stock|on_backorder)[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i
+  )?.[1];
+
+  const visible = statusFromAvailability(stripTags(availabilityElement || stockClassElement || ""));
+
+  return visible || statusFromAvailability(String(offerAvailability ?? ""));
 }
 
 function absoluteUrl(value: string, baseUrl: string) {
@@ -453,18 +514,44 @@ function parseProductAccessories(html: string, baseUrl: string) {
   ).values()];
 }
 
-export async function scrapeLiveProduct(url: string): Promise<ScrapedProductData> {
-  const response = await fetch(url, {
-    cache: "no-store",
-    headers: {
-      "User-Agent": "FCW Product Sheet Validator"
-    }
-  });
+async function fetchLiveProductPage(url: string, timeoutMs = 30000) {
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        "User-Agent": "FCW Product Sheet Validator"
+      },
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+  } catch (error) {
+    throw friendlyNetworkError(error, "Live product page");
+  }
   const html = await response.text();
 
   if (!response.ok) {
     throw new Error(`Live URL scrape failed: ${response.status}`);
   }
+
+  return { response, html };
+}
+
+export async function scrapeLiveProductStock(url: string) {
+  const { response, html } = await fetchLiveProductPage(url, 15000);
+  const jsonLd = parseJsonLd(html);
+  const offers = jsonLd?.offers && typeof jsonLd.offers === "object"
+    ? (jsonLd.offers as Record<string, unknown>)
+    : {};
+
+  return {
+    url: response.url,
+    stockStatus: productStockStatus(html, offers.availability)
+  };
+}
+
+export async function scrapeLiveProduct(url: string): Promise<ScrapedProductData> {
+  const { response, html } = await fetchLiveProductPage(url);
 
   const jsonLd = parseJsonLd(html);
   const offers = jsonLd?.offers && typeof jsonLd.offers === "object" ? (jsonLd.offers as Record<string, unknown>) : {};
@@ -478,8 +565,12 @@ export async function scrapeLiveProduct(url: string): Promise<ScrapedProductData
     (typeof jsonLd?.description === "string" ? stripTags(jsonLd.description) : "") ||
     metaContent(html, "description");
   const sku = typeof jsonLd?.sku === "string" ? htmlDecode(jsonLd.sku).trim() : "";
-  const price = parseMoney(String(offers.price ?? ""));
-  const stockStatus = statusFromAvailability(String(offers.availability ?? ""));
+  const vatPrices = productVatPrices(html);
+  const price = vatPrices.price || parseMoney(String(offers.price ?? ""));
+  const priceCurrency = typeof offers.priceCurrency === "string"
+    ? offers.priceCurrency.trim().toUpperCase()
+    : "";
+  const stockStatus = productStockStatus(html, offers.availability);
   const images = [
     ...jsonLdImages(jsonLd?.image, response.url),
     absoluteUrl(metaContent(html, "og:image"), response.url)
@@ -492,6 +583,10 @@ export async function scrapeLiveProduct(url: string): Promise<ScrapedProductData
     descriptionText,
     sku,
     price,
+    priceExVat: vatPrices.priceExVat,
+    vatAmount: vatPrices.vatAmount,
+    vatRate: vatPrices.vatRate,
+    priceCurrency,
     stockStatus,
     images: [...new Set(images)],
     colourOptions: parseProductColourOptions(html, response.url),
@@ -654,10 +749,23 @@ export function resolveCategories(row: SheetProductRow, categories: WooCategory[
   };
 }
 
-function sheetPrice(row: SheetProductRow) {
+export function sheetProductPrice(row: SheetProductRow) {
+  const acceptedHeaders = new Set([
+    "price",
+    "price (inc vat)",
+    "regular price",
+    "product price",
+    "unit price",
+    "rrp"
+  ]);
+  const exactPrice = Object.entries(row.values).find(
+    ([key, value]) => acceptedHeaders.has(normalizeText(key)) && value.trim()
+  )?.[1] ?? "";
+
   return parseMoney(
-    fieldValue(row.values, ["price", "regular price", "sale price", "live price"]) ||
-      findValue(row.values, ["price"])
+    exactPrice ||
+      findValue(row.values, ["regular", "price"]) ||
+      findValue(row.values, ["product", "price"])
   );
 }
 
@@ -1066,6 +1174,10 @@ export function colourBoardPersonalizationMeta(options: ColourBoardOption[]) {
   ];
 
   if (items.length === 0) {
+    meta.push(
+      { key: "personalization_0_image_items", value: 0 },
+      { key: "_personalization_0_image_items", value: "field_68b436e85c34c" }
+    );
     return meta;
   }
 
@@ -1219,7 +1331,7 @@ export async function buildProductCreateDraft(
   const descriptionHtml = removeFeatureSection(scraped.descriptionHtml);
   const descriptionText = stripTags(descriptionHtml);
   const productName = row.name || scraped.title;
-  const regularPrice = sheetPrice(row) || scraped.price;
+  const regularPrice = sheetProductPrice(row) || scraped.price;
   const rawAccessoriesJson = accessories.length > 0 ? JSON.stringify(accessories) : "";
   const rawColourJson = colourOptions.length > 0 ? JSON.stringify(colourOptions) : "";
   const customNotes = sheetCustomNotesExpected(row);

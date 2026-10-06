@@ -66,6 +66,8 @@ export type WooProduct = {
   price: string;
   regular_price: string;
   sale_price: string;
+  tax_status?: "taxable" | "shipping" | "none";
+  tax_class?: string;
   stock_status: "instock" | "outofstock" | "onbackorder";
   backorders?: "no" | "notify" | "yes";
   backorders_allowed?: boolean;
@@ -91,12 +93,41 @@ export type WooProduct = {
   menu_order?: number;
 };
 
+export type WooStoreCurrency = {
+  code: string;
+  symbol: string;
+  minorUnit: number;
+  decimalSeparator: string;
+  thousandSeparator: string;
+  prefix: string;
+  suffix: string;
+};
+
+export type WooStoreTaxSettings = {
+  pricesIncludeTax: boolean;
+  displayShop: "incl" | "excl";
+  displayCart: "incl" | "excl";
+};
+
+export type WooTaxRate = {
+  id: number;
+  country: string;
+  state: string;
+  rate: string;
+  name: string;
+  class: string;
+  compound: boolean;
+  shipping: boolean;
+};
+
 export type ProductChanges = Partial<{
   type: string;
   name: string;
   sku: string;
   regular_price: string;
   sale_price: string;
+  tax_status: "taxable" | "shipping" | "none";
+  tax_class: string;
   status: string;
   featured: boolean;
   catalog_visibility: string;

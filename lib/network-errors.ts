@@ -35,7 +35,7 @@ export function networkErrorKind(error: unknown): NetworkErrorKind {
   return "unknown";
 }
 
-export function friendlyNetworkError(error: unknown, service: "WooCommerce" | "Google Sheets") {
+export function friendlyNetworkError(error: unknown, service: string) {
   const kind = networkErrorKind(error);
 
   if (kind === "timeout") {

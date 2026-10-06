@@ -649,6 +649,430 @@ button {
   white-space: nowrap;
 }
 
+.price-sync-workspace {
+  display: grid;
+  gap: 14px;
+}
+
+.price-sync-toolbar,
+.price-sync-progress-head,
+.price-sync-summary,
+.price-sync-actions {
+  display: flex;
+  align-items: center;
+}
+
+.price-sync-toolbar {
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0 4px;
+}
+
+.price-sync-toolbar > div:first-child {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.price-sync-toolbar h3,
+.price-sync-toolbar p {
+  margin: 0;
+}
+
+.price-sync-toolbar h3 {
+  font-size: 16px;
+}
+
+.price-sync-toolbar p,
+.price-sync-product span,
+.price-sync-progress-head span,
+.price-sync-queue span,
+.price-sync-empty span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.price-sync-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: #1769aa;
+  background: #eaf4fb;
+  border-radius: 7px;
+}
+
+.price-sync-toolbar-actions,
+.price-sync-progress-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.price-sync-summary {
+  min-height: 44px;
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 8px 12px;
+  background: #f7f9fb;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.price-sync-summary > span {
+  padding: 3px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  border-right: 1px solid var(--line);
+}
+
+.price-sync-summary > span:first-child {
+  padding-left: 0;
+}
+
+.price-sync-summary > span:last-child {
+  border-right: 0;
+}
+
+.price-sync-summary strong {
+  color: var(--ink);
+}
+
+.price-sync-filter {
+  position: relative;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: minmax(220px, 440px) 1fr;
+  align-items: center;
+  gap: 12px;
+}
+
+.price-sync-list-tools {
+  display: grid;
+  gap: 10px;
+}
+
+.price-sync-status-filters {
+  width: fit-content;
+  max-width: 100%;
+  display: flex;
+  overflow-x: auto;
+  background: #f1f4f7;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 3px;
+}
+
+.price-sync-status-filters button {
+  min-height: 32px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.price-sync-status-filters button:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.price-sync-status-filters button.is-active {
+  color: var(--ink);
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(20, 35, 50, 0.14);
+}
+
+.price-sync-status-filters button span {
+  min-width: 20px;
+  padding: 1px 5px;
+  color: inherit;
+  background: #e4e9ef;
+  border-radius: 4px;
+  font-size: 11px;
+  text-align: center;
+}
+
+.price-sync-filter > svg {
+  position: absolute;
+  left: 12px;
+  z-index: 1;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.price-sync-filter input {
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 36px;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid #c8d0da;
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
+}
+
+.price-sync-filter input:hover {
+  border-color: #9ca9b7;
+}
+
+.price-sync-filter input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(23, 105, 170, 0.14);
+}
+
+.price-sync-filter input::placeholder {
+  color: #778395;
+}
+
+.price-sync-filter span {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.price-sync-progress {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.price-sync-progress-head {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.price-sync-progress-head > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.price-sync-queue {
+  max-height: 260px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+}
+
+.price-sync-queue > div {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.price-sync-queue > div > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.price-sync-queue strong,
+.price-sync-queue span {
+  overflow-wrap: anywhere;
+}
+
+.price-sync-queue-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.price-sync-queue-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.price-sync-queue-links a:hover {
+  text-decoration: underline;
+}
+
+.price-sync-list {
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.price-sync-row {
+  min-height: 94px;
+  display: grid;
+  grid-template-columns: minmax(230px, 1.5fr) minmax(260px, 1fr) minmax(250px, auto);
+  align-items: center;
+  gap: 18px;
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.price-sync-row:last-child {
+  border-bottom: 0;
+}
+
+.price-sync-row:hover {
+  background: #fafbfd;
+}
+
+.price-sync-product {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+}
+
+.price-sync-product-title {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.price-sync-product-title > strong {
+  min-width: 0;
+}
+
+.price-sync-state {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid #cbd5df;
+  border-radius: 4px;
+  font-size: 10px !important;
+  font-weight: 800;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.price-sync-state.is-success {
+  color: #176b42;
+  background: #eef9f3;
+  border-color: #a9d9bf;
+}
+
+.price-sync-state.is-warning {
+  color: #8a5200;
+  background: #fff8e8;
+  border-color: #e8ca8c;
+}
+
+.price-sync-state.is-error {
+  color: #a61b1b;
+  background: #fff1f1;
+  border-color: #e5aaaa;
+}
+
+.price-sync-state.is-neutral {
+  color: #596779;
+  background: #f4f6f8;
+  border-color: #d2d9e1;
+}
+
+.price-sync-product strong {
+  overflow-wrap: anywhere;
+}
+
+.price-sync-values {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(110px, 1fr));
+  align-items: center;
+  gap: 8px;
+}
+
+.price-sync-values > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding-left: 11px;
+  border-left: 3px solid #dbe2ea;
+}
+
+.price-sync-values > div:first-child {
+  border-left-color: #1769aa;
+}
+
+.price-sync-values span,
+.price-sync-values small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.price-sync-values strong {
+  font-size: 16px;
+}
+
+.price-sync-values .price-sync-checked {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #176b42;
+  font-weight: 700;
+}
+
+.price-sync-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.price-sync-empty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px;
+  color: #176b42;
+  background: #f0faf5;
+  border: 1px solid #b9dfca;
+  border-radius: 8px;
+}
+
+.price-sync-empty > div {
+  display: grid;
+  gap: 2px;
+}
+
+.price-sync-empty.is-neutral {
+  color: var(--muted);
+  background: #f7f9fb;
+  border-color: var(--line);
+}
+
+.price-sync-more {
+  justify-self: center;
+}
+
+.has-error {
+  color: #b91c1c !important;
+}
+
+.spin {
+  animation: interface-spin 800ms linear infinite;
+}
+
+@keyframes interface-spin {
+  to { transform: rotate(360deg); }
+}
+
 .product-list-price {
   display: block;
   margin-top: 4px;
@@ -3965,6 +4389,51 @@ tr:last-child td {
 }
 
 @media (max-width: 920px) {
+  .price-sync-toolbar,
+  .price-sync-progress-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .price-sync-toolbar-actions,
+  .price-sync-progress-actions {
+    justify-content: flex-start;
+  }
+
+  .price-sync-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .price-sync-summary > span {
+    width: 100%;
+    padding: 5px 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .price-sync-summary > span:last-child {
+    border-bottom: 0;
+  }
+
+  .price-sync-row {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .price-sync-filter {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .price-sync-filter span {
+    grid-column: 1;
+    text-align: left;
+  }
+
+  .price-sync-actions {
+    justify-content: flex-start;
+  }
+
   .topbar,
   .page-head,
   .category-merge-head,

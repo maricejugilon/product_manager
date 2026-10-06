@@ -2,6 +2,9 @@
   "name": "fcw-woocommerce-product-manager",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "dev": "node --use-system-ca node_modules/next/dist/bin/next dev",
     "build": "node scripts/vercel-build.mjs",
@@ -11,7 +14,7 @@
   },
   "dependencies": {
     "lucide-react": "latest",
-    "next": "latest",
+    "next": "^16.3.8",
     "react": "latest",
     "react-dom": "latest",
     "server-only": "latest"

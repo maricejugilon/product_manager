@@ -9,6 +9,7 @@ import {
   FileSpreadsheet,
   Filter,
   PackageCheck,
+  PoundSterling,
   RotateCcw,
   Search,
   SquarePen
@@ -17,15 +18,20 @@ import {
 import PageHelp from "@/components/page-help";
 import PagePurpose from "@/components/page-purpose";
 import PaginationControls from "@/components/pagination-controls";
-import UpdatedListActions from "@/components/updated-list-actions";
+import UpdatedListActions, { type UpdatedListTab } from "@/components/updated-list-actions";
+import type { ProductSheetQaCheck } from "@/lib/product-sheet-qa";
+import { updatedListCheckStorageMode } from "@/lib/updated-list-check-store";
 import {
   getUpdatedListData,
   normalizeUpdatedListProductName,
   normalizeUpdatedListSku,
   updatedListRowIsDraft,
   updatedListRowIsMissing,
+  updatedListRowCanCheckPrice,
   updatedListRowNeedsSpecifications,
-  updatedListRowNeedsUpdate
+  updatedListRowNeedsUpdate,
+  updatedListRowNeedsQa,
+  updatedListRowHasQaReport
 } from "@/lib/updated-list";
 
 export const dynamic = "force-dynamic";
@@ -52,9 +58,37 @@ function statusFilter(value: string | undefined) {
     value === "missing" ||
     value === "draft" ||
     value === "needs-update" ||
+    value === "price-update" ||
     value === "specifications-missing"
     ? value
     : "all";
+}
+
+function updatedListTab(value: string | undefined): UpdatedListTab {
+  return value === "missing" ||
+    value === "drafts" ||
+    value === "mismatches" ||
+    value === "specifications" ||
+    value === "qa" ||
+    value === "prices" ||
+    value === "stocks"
+    ? value
+    : "list";
+}
+
+function compactQaCheck(check: ProductSheetQaCheck): ProductSheetQaCheck {
+  const resolved = Boolean(check.resolved);
+
+  return {
+    field: check.field,
+    label: check.label,
+    failed: check.failed,
+    raw: resolved || check.reason ? "" : check.raw,
+    reason: resolved ? "" : check.reason,
+    missing: [],
+    extra: [],
+    resolved: check.resolved
+  };
 }
 
 function FieldStatus({
@@ -120,6 +154,7 @@ export default async function UpdatedListPage({
   const perPage = pageSize(first(params.per_page));
   const search = first(params.search) ?? "";
   const presenceStatus = statusFilter(first(params.status));
+  const initialTab = updatedListTab(first(params.tab));
 
   const data = await getUpdatedListData();
   const normalizedSearch = normalizeUpdatedListProductName(search);
@@ -157,6 +192,10 @@ export default async function UpdatedListPage({
         return updatedListRowNeedsSpecifications(row);
       }
 
+      if (presenceStatus === "price-update") {
+        return updatedListRowCanCheckPrice(row);
+      }
+
       return row.wooMatch;
     });
 
@@ -164,15 +203,92 @@ export default async function UpdatedListPage({
   const totalPages = Math.max(1, Math.ceil(totalItems / perPage));
   const safePage = Math.min(page, totalPages);
   const visibleRows = rows.slice((safePage - 1) * perPage, safePage * perPage);
-  const actionRows = rows.filter(
-    (row) =>
-      updatedListRowIsMissing(row) ||
-      updatedListRowIsDraft(row) ||
-      updatedListRowNeedsUpdate(row) ||
-      updatedListRowNeedsSpecifications(row)
-  );
-  const draftCount = rows.filter(updatedListRowIsDraft).length;
-
+  const summaryFieldFixRows = rows.filter(updatedListRowNeedsUpdate);
+  const summaryPriceRows = rows.filter(updatedListRowCanCheckPrice);
+  const summary = {
+    missing: rows.filter(updatedListRowIsMissing).length,
+    drafts: rows.filter(updatedListRowIsDraft).length,
+    fieldFixes: summaryFieldFixRows.length,
+    specifications: rows.filter(updatedListRowNeedsSpecifications).length,
+    qaFailures: rows.filter(updatedListRowNeedsQa).length,
+    priceChecks: summaryPriceRows.length,
+    stockChecks: summaryPriceRows.length,
+    missingFields: {
+      customNotes: summaryFieldFixRows.filter((row) => row.customNotesExpected && !row.customNotesPresent).length,
+      colourBoard: summaryFieldFixRows.filter((row) => row.colourBoardExpected && !row.colourBoardPresent).length,
+      accessories: summaryFieldFixRows.filter((row) => row.accessoriesExpected && !row.accessoriesPresent).length
+    }
+  };
+  const actionRows = rows
+    .filter((row) => {
+      if (initialTab === "missing") return updatedListRowIsMissing(row);
+      if (initialTab === "drafts") return updatedListRowIsDraft(row);
+      if (initialTab === "mismatches") return updatedListRowNeedsUpdate(row);
+      if (initialTab === "specifications") return updatedListRowNeedsSpecifications(row);
+      if (initialTab === "qa") return updatedListRowHasQaReport(row);
+      return false;
+    })
+    .map((row) => ({
+      rowNumber: row.rowNumber,
+      sheetRowNumber: row.sheetRowNumber,
+      name: row.name,
+      wooId: row.wooId,
+      wooPermalink: row.wooPermalink,
+      wooMatch: row.wooMatch,
+      wooStatus: row.wooStatus,
+      ambiguousMatch: row.ambiguousMatch,
+      wooMatches: row.wooMatches,
+      customNotesExpected: row.customNotesExpected,
+      colourBoardExpected: row.colourBoardExpected,
+      accessoriesExpected: row.accessoriesExpected,
+      specificationsExpected: row.specificationsExpected,
+      specificationsFeature: row.specificationsFeature,
+      customNotesPresent: row.customNotesPresent,
+      colourBoardPresent: row.colourBoardPresent,
+      accessoriesPresent: row.accessoriesPresent,
+      specificationsPresent: row.specificationsPresent,
+      qaCustomNotes: compactQaCheck(row.qaCustomNotes),
+      qaAccessories: compactQaCheck(row.qaAccessories),
+      qaColour: compactQaCheck(row.qaColour)
+    }));
+  const priceRows = (initialTab === "prices" ? rows : [])
+    .filter(updatedListRowCanCheckPrice)
+    .map((row) => ({
+      sheetRowNumber: row.sheetRowNumber,
+      name: row.name,
+      wooId: row.wooId,
+      sourceProductUrl: row.sourceProductUrl,
+      sheetPrice: row.sheetPrice,
+      wooRegularPrice: row.wooRegularPrice,
+      wooSalePrice: row.wooSalePrice,
+      wooLivePrice: row.wooLivePrice,
+      wooTaxStatus: row.wooTaxStatus,
+      wooTaxClass: row.wooTaxClass,
+      wooSavedPriceIncVat: row.wooSavedPriceIncVat,
+      wooSavedPriceExVat: row.wooSavedPriceExVat,
+      wooSavedVatAmount: row.wooSavedVatAmount,
+      wooSavedVatRate: row.wooSavedVatRate,
+      wooSavedPriceCurrency: row.wooSavedPriceCurrency,
+      wooSavedVatTaxClass: row.wooSavedVatTaxClass,
+      wooSavedVatRateName: row.wooSavedVatRateName,
+      wooDateModified: row.wooDateModified,
+      priceLastSyncedAt: row.priceLastSyncedAt
+    }));
+  const stockRows = (initialTab === "stocks" ? rows : [])
+    .filter(updatedListRowCanCheckPrice)
+    .map((row) => ({
+      sheetRowNumber: row.sheetRowNumber,
+      name: row.name,
+      wooId: row.wooId,
+      wooPermalink: row.wooPermalink,
+      sourceProductUrl: row.sourceProductUrl,
+      wooStockStatus: row.wooStockStatus,
+      wooBackorders: row.wooBackorders,
+      wooManageStock: row.wooManageStock,
+      wooStockQuantity: row.wooStockQuantity,
+      wooDateModified: row.wooDateModified,
+      stockLastSyncedAt: row.stockLastSyncedAt
+    }));
   return (
     <main className="page">
       <div className="page-head">
@@ -208,7 +324,7 @@ export default async function UpdatedListPage({
             ]}
             safety={
               <>
-                <strong>Read-only comparison.</strong> This page only checks product names against WooCommerce and does not change records.
+                <strong>Review-first updates.</strong> Changes are prepared in the Review Queue and only reach WooCommerce after approval.
               </>
             }
           />
@@ -236,6 +352,11 @@ export default async function UpdatedListPage({
             <ClipboardList size={18} />
             <strong>{data.rows.filter(updatedListRowNeedsSpecifications).length}</strong>
             Specifications missing
+          </Link>
+          <Link className="metric" href="/updated-list?status=price-update">
+            <PoundSterling size={18} />
+            <strong>{data.rows.filter(updatedListRowCanCheckPrice).length}</strong>
+            Live price checks
           </Link>
         </div>
       </div>
@@ -284,6 +405,7 @@ export default async function UpdatedListPage({
               <option value="draft">Draft</option>
               <option value="needs-update">Needs field update</option>
               <option value="specifications-missing">Specifications missing</option>
+              <option value="price-update">Has product-link price check</option>
             </select>
           </div>
 
@@ -305,9 +427,15 @@ export default async function UpdatedListPage({
 
       <UpdatedListActions
         rows={actionRows}
+        priceRows={priceRows}
+        stockRows={stockRows}
+        currency={data.currency}
+        tax={data.tax}
         updatedAt={data.updatedAt}
-        draftCount={draftCount}
+        summary={summary}
         wooStoreUrl={process.env.WOOCOMMERCE_STORE_URL ?? ""}
+        sharedStorage={updatedListCheckStorageMode()}
+        initialTab={initialTab}
       />
 
       <section className="product-list-table updated-list-table-shell">

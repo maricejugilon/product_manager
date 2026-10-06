@@ -1,7 +1,5 @@
 import "server-only";
 
-import { revalidateTag } from "next/cache";
-
 import { resolveColourBoardImagesInChanges } from "@/lib/colour-board-media";
 import {
   getProductSheetRows,
@@ -22,6 +20,7 @@ import {
 } from "@/lib/product-sheet-create";
 import { buildProductSheetFix } from "@/lib/product-sheet-fix";
 import { deleteReview, listReviews, patchReview } from "@/lib/review-store";
+import { deleteUpdatedListDataCache } from "@/lib/updated-list-check-store";
 import type {
   CategoryChanges,
   CategoryMergeChanges,
@@ -62,6 +61,16 @@ type ProductReviewBefore = {
   sheetSource?: string;
   row?: SheetProductRow;
   fields?: string[];
+  expectedPrice?: string;
+  expectedPriceIncVat?: string;
+  expectedPriceExVat?: string;
+  vatAmount?: string;
+  vatRate?: string;
+  currency?: { code?: string };
+  wooTaxRate?: { name?: string; class?: string; rate?: string };
+  scrapedProductUrl?: string;
+  expectedStockStatus?: ProductChanges["stock_status"];
+  expectedBackorders?: ProductChanges["backorders"];
   attributeConfig?: {
     make?: { id?: number };
     model?: { id?: number };
@@ -70,7 +79,16 @@ type ProductReviewBefore = {
     make?: string[];
     model?: string[];
   };
+  expectedCounts?: {
+    accessories?: number;
+    colourBoard?: number;
+  };
 };
+
+function normalizedPrice(value: string | undefined) {
+  const parsed = Number(value);
+  return value?.trim() && Number.isFinite(parsed) ? parsed.toFixed(2) : "";
+}
 
 function mergeProductChanges(current: ProductChanges, incoming: ProductChanges) {
   const metaData = new Map(
@@ -147,6 +165,20 @@ function sourceProductIdFromUrl(value: string) {
   }
 }
 
+function accessorySourceIds(accessory: AccessoryItem) {
+  return new Set([
+    String(accessory.source_product_id ?? "").trim(),
+    String(accessory.sku ?? "").trim(),
+    sourceProductIdFromUrl(String(accessory.url ?? ""))
+  ].filter(Boolean));
+}
+
+function accessoriesIdentifySameSource(first: AccessoryItem, second: AccessoryItem) {
+  const firstIds = accessorySourceIds(first);
+
+  return [...accessorySourceIds(second)].some((id) => firstIds.has(id));
+}
+
 function uniqueAccessorySheetRow(
   accessory: AccessoryItem,
   rows: SheetProductRow[],
@@ -216,7 +248,8 @@ function accessoriesRootCategory(categories: WooCategory[]) {
 function scrapedAccessoryChanges(
   accessory: AccessoryItem,
   categories: WooCategory[],
-  parentUrl: string
+  parentUrl: string,
+  source: "parent_scrape" | "review_payload" = "parent_scrape"
 ): ProductChanges {
   const category = accessoriesRootCategory(categories);
 
@@ -227,23 +260,33 @@ function scrapedAccessoryChanges(
   }
 
   const name = String(accessory.name ?? "").trim();
+  const sku = String(accessory.sku || accessory.source_product_id || "").trim();
   const price = String(accessory.price ?? "").trim();
   const imageUrl = String(accessory.image_url ?? "").trim();
+  const usableImageUrl = /(?:^|\/)no[_-]?image(?:_s)?\.[a-z0-9]+(?:\?|$)/i.test(imageUrl)
+    ? ""
+    : imageUrl;
 
   return {
     type: "simple",
     name,
+    ...(sku ? { sku } : {}),
     status: "publish",
     catalog_visibility: "visible",
     ...(price ? { regular_price: price } : {}),
     stock_status: "instock",
     manage_stock: false,
     categories: [{ id: category.id }],
-    ...(imageUrl ? { images: [{ src: imageUrl, alt: name }] } : {}),
+    ...(usableImageUrl ? { images: [{ src: usableImageUrl, alt: name }] } : {}),
     meta_data: [
-      { key: "_fcw_source", value: "updated_list_accessory_scrape" },
+      {
+        key: "_fcw_source",
+        value: source === "parent_scrape"
+          ? "updated_list_accessory_scrape"
+          : "updated_list_accessory_review_payload"
+      },
       { key: "_fcw_accessory_source_parent_url", value: parentUrl },
-      { key: "_fcw_source_accessory_id", value: accessory.source_product_id ?? "" },
+      { key: "_fcw_source_accessory_id", value: accessory.source_product_id || sku },
       { key: "_fcw_source_accessory_section_id", value: accessory.source_section_id ?? "" },
       { key: "_fcw_source_accessory_section_type", value: accessory.source_section_type ?? "" }
     ]
@@ -293,6 +336,10 @@ async function resolveReviewAccessories(
     changes.meta_data?.some((item) => item.key === "product_accessories");
 
   if (!row?.values || !hasAccessoryPayload) {
+    return changes;
+  }
+
+  if (before?.source === "updated_list_qa_fix" && before.expectedCounts?.accessories === 0) {
     return changes;
   }
 
@@ -348,16 +395,26 @@ async function resolveReviewAccessories(
       for (const pending of missingSheetRows) {
         const normalizedName = normalizeAccessoryName(String(pending.accessory.name ?? ""));
         const matches = scrapedAccessories.filter(
-          (accessory) => normalizeAccessoryName(String(accessory.name ?? "")) === normalizedName
+          (accessory) =>
+            normalizeAccessoryName(String(accessory.name ?? "")) === normalizedName ||
+            accessoriesIdentifySameSource(pending.accessory, accessory)
         );
+
+        if (matches.length === 1) {
+          pending.scraped = matches[0];
+          continue;
+        }
+
+        if (matches.length === 0 && accessorySourceIds(pending.accessory).size > 0) {
+          pending.scraped = pending.accessory;
+          continue;
+        }
 
         if (matches.length !== 1) {
           throw new Error(
-            `Accessory ${accessoryLabel(pending.accessory)} has no unique Product list row and could not be uniquely scraped from the parent product-link.`
+            `Accessory ${accessoryLabel(pending.accessory)} has no unique Product list row or stable source identity and could not be uniquely scraped from the parent product-link.`
           );
         }
-
-        pending.scraped = matches[0];
       }
     }
 
@@ -369,7 +426,12 @@ async function resolveReviewAccessories(
             row: pending.row,
             categories
           })).changes
-        : scrapedAccessoryChanges(pending.scraped!, categories, row.liveUrl);
+        : scrapedAccessoryChanges(
+            pending.scraped!,
+            categories,
+            row.liveUrl,
+            pending.scraped === pending.accessory ? "review_payload" : "parent_scrape"
+          );
       const product: WooProduct = await createOrUpdateProduct(productChanges);
 
       if (product.id === review.resourceId) {
@@ -450,8 +512,94 @@ async function publishReview(review: ReviewRecord) {
 
     let updated = await updateProduct(review.resourceId, changes);
 
+    if (before?.source === "updated_list_price_sync") {
+      const expectedPrice = normalizedPrice(before.expectedPrice || changes.regular_price);
+      const expectedTaxClass = changes.tax_class ?? "";
+      const productWasSaved = () =>
+        normalizedPrice(updated.regular_price) === expectedPrice &&
+        !normalizedPrice(updated.sale_price) &&
+        normalizedPrice(updated.price) === expectedPrice &&
+        updated.tax_status === "taxable" &&
+        (updated.tax_class ?? "") === expectedTaxClass;
+
+      if (expectedPrice && !productWasSaved()) {
+        updated = await updateProduct(review.resourceId, {
+          regular_price: expectedPrice,
+          sale_price: "",
+          tax_status: "taxable",
+          tax_class: expectedTaxClass
+        });
+      }
+
+      if (expectedPrice && !productWasSaved()) {
+        throw new Error(
+          `WooCommerce did not save the product-link price ${expectedPrice} and VAT tax class after retrying.`
+        );
+      }
+
+      const sourceUrl = before.scrapedProductUrl || before.row?.liveUrl || "";
+      const configuredTaxClass = before.wooTaxRate?.class || (expectedTaxClass || "standard");
+      const syncValues = [
+        { key: "_fcw_price_synced_at", value: new Date().toISOString() },
+        { key: "_fcw_price_sync_source", value: "updated_list" },
+        { key: "_fcw_price_sync_source_url", value: sourceUrl },
+        { key: "_fcw_price_sync_inc_vat", value: before.expectedPriceIncVat ?? "" },
+        { key: "_fcw_price_sync_ex_vat", value: before.expectedPriceExVat ?? "" },
+        { key: "_fcw_price_sync_vat_amount", value: before.vatAmount ?? "" },
+        { key: "_fcw_price_sync_vat_rate", value: before.vatRate ?? "" },
+        { key: "_fcw_price_sync_sheet_row", value: before.row?.rowNumber ?? "" },
+        { key: "fcw_price_currency", value: before.currency?.code ?? "" },
+        { key: "fcw_price_inc_vat", value: before.expectedPriceIncVat ?? "" },
+        { key: "fcw_price_ex_vat", value: before.expectedPriceExVat ?? "" },
+        { key: "fcw_vat_amount", value: before.vatAmount ?? "" },
+        { key: "fcw_vat_rate", value: before.vatRate ?? "" },
+        { key: "fcw_vat_tax_class", value: configuredTaxClass },
+        { key: "fcw_vat_rate_name", value: before.wooTaxRate?.name ?? "" }
+      ];
+      const syncMetadata = syncValues.map((value) => {
+        const existing = updated.meta_data?.find((item) => item.key === value.key);
+        return { ...(existing?.id ? { id: existing.id } : {}), ...value };
+      });
+      updated = await updateProduct(review.resourceId, { meta_data: syncMetadata });
+    }
+
+    if (before?.source === "updated_list_stock_sync") {
+      const expectedStockStatus = before.expectedStockStatus || changes.stock_status;
+      const expectedBackorders = before.expectedBackorders || changes.backorders;
+      const stockWasSaved = () =>
+        Boolean(expectedStockStatus) &&
+        updated.stock_status === expectedStockStatus &&
+        (!expectedBackorders || updated.backorders === expectedBackorders);
+
+      if (!stockWasSaved() && expectedStockStatus) {
+        updated = await updateProduct(review.resourceId, {
+          stock_status: expectedStockStatus,
+          ...(expectedBackorders ? { backorders: expectedBackorders } : {})
+        });
+      }
+
+      if (!stockWasSaved()) {
+        throw new Error("WooCommerce did not save the product-link stock status after retrying.");
+      }
+
+      const syncedAt = new Date().toISOString();
+      const stockValues = [
+        { key: "_fcw_stock_synced_at", value: syncedAt },
+        { key: "_fcw_stock_sync_source", value: "updated_list" },
+        { key: "_fcw_stock_sync_source_url", value: before.scrapedProductUrl || before.row?.liveUrl || "" },
+        { key: "_fcw_stock_sync_sheet_row", value: before.row?.rowNumber ?? "" },
+        { key: "fcw_live_stock_status", value: expectedStockStatus ?? "" },
+        { key: "fcw_live_stock_checked_at", value: syncedAt }
+      ];
+      const stockMetadata = stockValues.map((value) => {
+        const existing = updated.meta_data?.find((item) => item.key === value.key);
+        return { ...(existing?.id ? { id: existing.id } : {}), ...value };
+      });
+      updated = await updateProduct(review.resourceId, { meta_data: stockMetadata });
+    }
+
     if (
-      before?.source === "product_sheet_validator_fix" &&
+      (before?.source === "product_sheet_validator_fix" || before?.source === "updated_list_qa_fix") &&
       before.fields?.includes("colour_board")
     ) {
       const expectedCount = Number(
@@ -461,16 +609,19 @@ async function publishReview(review: ReviewRecord) {
         updated.meta_data?.find((item) => item.key === "personalization_0_image_items")?.value ?? 0
       );
 
-      if (expectedCount > 0 && savedCount < expectedCount && changes.meta_data?.length) {
+      const exactQaCount = before.source === "updated_list_qa_fix";
+      const colourMismatch = exactQaCount ? savedCount !== expectedCount : expectedCount > 0 && savedCount < expectedCount;
+
+      if (colourMismatch && changes.meta_data?.length) {
         updated = await updateProduct(review.resourceId, { meta_data: changes.meta_data });
         savedCount = Number(
           updated.meta_data?.find((item) => item.key === "personalization_0_image_items")?.value ?? 0
         );
       }
 
-      if (expectedCount > 0 && savedCount < expectedCount) {
+      if (exactQaCount ? savedCount !== expectedCount : expectedCount > 0 && savedCount < expectedCount) {
         throw new Error(
-          `WooCommerce saved ${savedCount} of ${expectedCount} colour-board options in Products > Options after retrying.`
+          `WooCommerce saved ${savedCount} colour-board options instead of the expected ${expectedCount} in Products > Options after retrying.`
         );
       }
     }
@@ -494,6 +645,26 @@ async function publishReview(review: ReviewRecord) {
       if (missingIds.length > 0) {
         throw new Error(
           `WooCommerce did not save ${missingIds.length} of ${changes.cross_sell_ids.length} accessory links after retrying. Please retry this review.`
+        );
+      }
+    }
+
+    if (
+      before?.source === "updated_list_qa_fix" &&
+      before.fields?.includes("accessories")
+    ) {
+      const expectedIds = [...new Set(changes.cross_sell_ids ?? [])].sort((first, second) => first - second);
+      let savedIds = [...new Set(updated.cross_sell_ids ?? [])].sort((first, second) => first - second);
+      const idsMatch = () => expectedIds.length === savedIds.length && expectedIds.every((id, index) => id === savedIds[index]);
+
+      if (!idsMatch()) {
+        updated = await updateProduct(review.resourceId, { cross_sell_ids: expectedIds });
+        savedIds = [...new Set(updated.cross_sell_ids ?? [])].sort((first, second) => first - second);
+      }
+
+      if (!idsMatch()) {
+        throw new Error(
+          `WooCommerce saved ${savedIds.length} accessory links instead of the expected ${expectedIds.length} after retrying.`
         );
       }
     }
@@ -534,7 +705,13 @@ export async function approveReview(review: ReviewRecord) {
     await publishReview(review);
 
     if (review.resource === "product" || review.resource === "product_merge") {
-      revalidateTag("updated-list-data", { expire: 0 });
+      try {
+        await deleteUpdatedListDataCache();
+      } catch (error) {
+        console.warn("WooCommerce was updated, but the shared Updated List cache could not be cleared.", {
+          message: error instanceof Error ? error.message : "Unknown cache error"
+        });
+      }
     }
 
     const completed: ReviewRecord = {

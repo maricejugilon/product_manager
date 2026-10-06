@@ -22,6 +22,16 @@ import type { ProductChanges, WooProduct } from "@/lib/types";
 
 export type ProductSheetFixField = "custom_notes" | "colour_board" | "accessories" | "specifications";
 
+export type ProductSheetFixOverrides = {
+  customNotesExpected?: boolean;
+  colourBoardExpected?: boolean;
+  accessoriesExpected?: boolean;
+  accessoryNames?: string[];
+  colourNames?: string[];
+  accessoriesExpectedCount?: number;
+  colourBoardExpectedCount?: number;
+};
+
 function metaEntry(product: WooProduct, key: string, value: unknown) {
   const existing = product.meta_data?.find((item) => item.key === key);
 
@@ -87,6 +97,68 @@ function mergeExistingColourOptions<T extends { color_name?: string }>(expected:
   });
 }
 
+function uniqueByName<T>(items: T[], name: (item: T) => string) {
+  return [...new Map(
+    items
+      .filter((item) => name(item).trim())
+      .map((item) => [normalizeText(name(item)), item])
+  ).values()];
+}
+
+function combineByName<T>(
+  first: T[],
+  second: T[],
+  name: (item: T) => string
+) {
+  const combined = new Map<string, T>();
+
+  for (const item of first) {
+    const key = normalizeText(name(item));
+    if (key) combined.set(key, item);
+  }
+
+  for (const item of second) {
+    const key = normalizeText(name(item));
+    if (!key) continue;
+    const existing = combined.get(key);
+    combined.set(key, existing ? { ...existing, ...item } : item);
+  }
+
+  return [...combined.values()];
+}
+
+function selectExpectedItemsByCount<T>(
+  sheetItems: T[],
+  scrapedItems: T[],
+  expectedCount: number,
+  name: (item: T) => string
+) {
+  const sheetByName = new Map(
+    sheetItems.map((item) => [normalizeText(name(item)), item])
+  );
+  const scrapedByName = new Map(
+    scrapedItems.map((item) => [normalizeText(name(item)), item])
+  );
+
+  // A source with the exact QA count defines membership. This prevents naming
+  // differences between the sheet and live page from creating duplicate options.
+  if (sheetItems.length === expectedCount) {
+    return sheetItems.map((item) => {
+      const scrapedItem = scrapedByName.get(normalizeText(name(item)));
+      return scrapedItem ? { ...item, ...scrapedItem } : item;
+    });
+  }
+
+  if (scrapedItems.length === expectedCount) {
+    return scrapedItems.map((item) => {
+      const sheetItem = sheetByName.get(normalizeText(name(item)));
+      return sheetItem ? { ...sheetItem, ...item } : item;
+    });
+  }
+
+  return combineByName(sheetItems, scrapedItems, name);
+}
+
 function mergeMeta(
   current: NonNullable<ProductChanges["meta_data"]>,
   incoming: NonNullable<ProductChanges["meta_data"]>
@@ -103,14 +175,16 @@ function mergeMeta(
 export async function buildProductSheetFix(
   row: SheetProductRow,
   product: WooProduct,
-  fields: ProductSheetFixField[]
+  fields: ProductSheetFixField[],
+  overrides: ProductSheetFixOverrides = {}
 ) {
   const changes: ProductChanges = {};
   let metaData: NonNullable<ProductChanges["meta_data"]> = [];
   const warnings: string[] = [];
 
   if (fields.includes("custom_notes")) {
-    metaData.push(metaEntry(product, "custom_notes", sheetCustomNotesExpected(row) ? "1" : "0"));
+    const expected = overrides.customNotesExpected ?? sheetCustomNotesExpected(row);
+    metaData.push(metaEntry(product, "custom_notes", expected ? "1" : "0"));
     const acfFieldKey = product.meta_data?.find((item) => item.key === "_custom_notes")?.value;
 
     if (acfFieldKey) {
@@ -119,10 +193,21 @@ export async function buildProductSheetFix(
   }
 
   if (fields.includes("colour_board")) {
-    const sheetOptions = rowColourOptions(row);
+    const expected = overrides.colourBoardExpected ?? sheetColourBoardExpected(row);
+    const sheetOptions = expected
+      ? uniqueByName([
+          ...rowColourOptions(row),
+          ...(overrides.colourNames ?? []).map((name) => ({
+            option_group: "Personalise this item with coloured board",
+            color_name: name,
+            price_adjustment: "",
+            default_option: false
+          }))
+        ], (option) => String(option.color_name ?? ""))
+      : [];
     let scrapedOptions: Awaited<ReturnType<typeof scrapeProductColourOptions>> = [];
 
-    if (row.liveUrl) {
+    if (expected && row.liveUrl) {
       try {
         scrapedOptions = await scrapeProductColourOptions(row.liveUrl);
       } catch (error) {
@@ -134,9 +219,18 @@ export async function buildProductSheetFix(
       }
     }
 
-    const expectedOptions = mergeProductColourOptions(sheetOptions, scrapedOptions);
+    const expectedOptions = expected
+      ? overrides.colourBoardExpectedCount !== undefined
+        ? selectExpectedItemsByCount(
+            sheetOptions,
+            scrapedOptions,
+            overrides.colourBoardExpectedCount,
+            (option) => String(option.color_name ?? "")
+          )
+        : mergeProductColourOptions(sheetOptions, scrapedOptions)
+      : [];
 
-    if (sheetColourBoardExpected(row) && expectedOptions.length === 0) {
+    if (expected && expectedOptions.length === 0) {
       throw new Error("The sheet expects a colour board, but no colour options could be read from the sheet or product link.");
     }
 
@@ -158,10 +252,20 @@ export async function buildProductSheetFix(
   }
 
   if (fields.includes("accessories")) {
-    const sheetAccessories = rowAccessories(row);
+    const expected = overrides.accessoriesExpected ?? sheetAccessoriesExpected(row);
+    const sheetAccessories = expected
+      ? uniqueByName([
+          ...rowAccessories(row),
+          ...(overrides.accessoryNames ?? []).map((name) => ({
+            name,
+            relationship_type: "recommended",
+            option_group: "Frequently bought with these accessories"
+          }))
+        ], (accessory) => String(accessory.name ?? ""))
+      : [];
     let scrapedAccessories: Awaited<ReturnType<typeof scrapeProductAccessories>> = [];
 
-    if (sheetAccessoriesExpected(row) && row.liveUrl) {
+    if (expected && row.liveUrl) {
       try {
         scrapedAccessories = await scrapeProductAccessories(row.liveUrl);
       } catch (error) {
@@ -173,9 +277,18 @@ export async function buildProductSheetFix(
       }
     }
 
-    const expectedAccessories = mergeProductAccessories(sheetAccessories, scrapedAccessories);
+    const expectedAccessories = expected
+      ? overrides.accessoriesExpectedCount !== undefined
+        ? selectExpectedItemsByCount(
+            sheetAccessories,
+            scrapedAccessories,
+            overrides.accessoriesExpectedCount,
+            (accessory) => String(accessory.name ?? "")
+          )
+        : mergeProductAccessories(sheetAccessories, scrapedAccessories)
+      : [];
 
-    if (sheetAccessoriesExpected(row) && expectedAccessories.length === 0) {
+    if (expected && expectedAccessories.length === 0) {
       throw new Error(
         row.liveUrl
           ? "The sheet expects accessories, but no accessory products could be read from its product -link."

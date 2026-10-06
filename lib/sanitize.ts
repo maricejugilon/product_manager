@@ -41,6 +41,7 @@ export function compactProductChanges(input: unknown): ProductChanges {
     "sku",
     "regular_price",
     "sale_price",
+    "tax_class",
     "status",
     "catalog_visibility",
     "short_description",
@@ -82,6 +83,10 @@ export function compactProductChanges(input: unknown): ProductChanges {
 
   if (input.backorders === "no" || input.backorders === "notify" || input.backorders === "yes") {
     changes.backorders = input.backorders;
+  }
+
+  if (input.tax_status === "taxable" || input.tax_status === "shipping" || input.tax_status === "none") {
+    changes.tax_status = input.tax_status;
   }
 
   if (Array.isArray(input.categories)) {
@@ -193,6 +198,8 @@ export function compactProductSnapshot(input: unknown) {
     regular_price: asString(input.regular_price) ?? "",
     sale_price: asString(input.sale_price) ?? "",
     price: asString(input.price) ?? "",
+    tax_status: asString(input.tax_status) ?? "",
+    tax_class: asString(input.tax_class) ?? "",
     stock_status: asString(input.stock_status) ?? "",
     backorders: asString(input.backorders) ?? "",
     backorders_allowed: asBoolean(input.backorders_allowed),
