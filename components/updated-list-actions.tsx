@@ -99,6 +99,7 @@ type UpdatedListRow = {
   rowNumber: number;
   sheetRowNumber: number;
   name: string;
+  sku: string;
   wooId?: number;
   wooPermalink?: string;
   wooMatch: boolean;
@@ -123,6 +124,12 @@ type UpdatedListRow = {
   qaCustomNotes: ProductSheetQaCheck;
   qaAccessories: ProductSheetQaCheck;
   qaColour: ProductSheetQaCheck;
+  sheetDuplicateMatches: Array<{
+    rowNumber: number;
+    name: string;
+    sku: string;
+    matchedBy: Array<"sku" | "name">;
+  }>;
 };
 
 type UpdatedListSummary = {
@@ -131,6 +138,7 @@ type UpdatedListSummary = {
   fieldFixes: number;
   specifications: number;
   qaFailures: number;
+  sheetDuplicateRows: number;
   priceChecks: number;
   stockChecks: number;
   missingFields: {
@@ -616,7 +624,12 @@ export default function UpdatedListActions({
     [rows]
   );
   const qaRows = useMemo(
-    () => rows.filter((row) => row.qaCustomNotes.failed || row.qaAccessories.failed || row.qaColour.failed),
+    () => rows.filter((row) =>
+      row.qaCustomNotes.failed ||
+      row.qaAccessories.failed ||
+      row.qaColour.failed ||
+      row.sheetDuplicateMatches.length > 0
+    ),
     [rows]
   );
   function getMismatchFields(row: UpdatedListRow) {
@@ -1519,7 +1532,7 @@ export default function UpdatedListActions({
           <div>
             <h2 style={{ margin: 0 }}>Review & create actions</h2>
             <span>
-              {summary.missing} missing products | {summary.drafts} drafts | {summary.fieldFixes} field fixes | {summary.specifications} specifications missing | {summary.qaFailures} QA failures | {summary.priceChecks} live price checks
+              {summary.missing} missing products | {summary.drafts} drafts | {summary.fieldFixes} field fixes | {summary.specifications} specifications missing | {summary.qaFailures} QA failures | {summary.sheetDuplicateRows} duplicate sheet rows | {summary.priceChecks} live price checks
             </span>
             <span className={sharedWorkflowStorage === "error" ? "has-error" : undefined}>
               Data cache: {sharedStorage === "upstash" ? "Shared Upstash" : "Local development"} | Workflows: {sharedWorkflowStorage === "upstash" ? "Shared Upstash" : sharedWorkflowStorage === "local" ? "Local development" : sharedWorkflowStorage === "error" ? "Not shared" : "Connecting"}
@@ -1599,7 +1612,7 @@ export default function UpdatedListActions({
           },
           {
             id: "qa",
-            label: `QA checks (${summary.qaFailures})`
+            label: `QA checks (${summary.qaFailures} failed, ${summary.sheetDuplicateRows} duplicates)`
           }
         ].map((tab) => (
           <button
@@ -1920,6 +1933,9 @@ export default function UpdatedListActions({
             <div style={{ border: "1px solid #dbe2ea", borderRadius: 10, padding: 12 }}>
               <strong>{summary.qaFailures}</strong>
               <p style={{ margin: "6px 0 0", color: "#52607a" }}>Products with failed spreadsheet QA checks</p>
+              <p style={{ margin: "4px 0 0", color: "#52607a", fontSize: 12 }}>
+                {summary.sheetDuplicateRows} duplicate Product list rows
+              </p>
             </div>
             <div style={{ border: "1px solid #dbe2ea", borderRadius: 10, padding: 12 }}>
               <strong>{summary.priceChecks}</strong>

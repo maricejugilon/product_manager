@@ -5,6 +5,7 @@ import {
   updatedListRowCanCheckPrice,
   updatedListRowIsDraft,
   updatedListRowIsMissing,
+  updatedListRowHasSheetDuplicate,
   updatedListRowNeedsSpecifications,
   updatedListRowNeedsPriceUpdate,
   updatedListRowNeedsQa,
@@ -46,6 +47,7 @@ export async function POST(request: Request) {
       specificationsMissing: data.rows.filter(updatedListRowNeedsSpecifications).length,
       fieldFixes: data.rows.filter(updatedListRowNeedsUpdate).length,
       qaFailures: data.rows.filter(updatedListRowNeedsQa).length,
+      sheetDuplicateRows: data.rows.filter(updatedListRowHasSheetDuplicate).length,
       priceUpdates: data.rows.filter(updatedListRowNeedsPriceUpdate).length,
       livePriceCandidates: data.rows.filter(updatedListRowCanCheckPrice).length,
       liveStockCandidates: data.rows.filter(updatedListRowCanCheckPrice).length

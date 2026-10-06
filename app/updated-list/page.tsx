@@ -31,7 +31,8 @@ import {
   updatedListRowNeedsSpecifications,
   updatedListRowNeedsUpdate,
   updatedListRowNeedsQa,
-  updatedListRowHasQaReport
+  updatedListRowHasQaReport,
+  updatedListRowHasSheetDuplicate
 } from "@/lib/updated-list";
 
 export const dynamic = "force-dynamic";
@@ -211,6 +212,7 @@ export default async function UpdatedListPage({
     fieldFixes: summaryFieldFixRows.length,
     specifications: rows.filter(updatedListRowNeedsSpecifications).length,
     qaFailures: rows.filter(updatedListRowNeedsQa).length,
+    sheetDuplicateRows: rows.filter(updatedListRowHasSheetDuplicate).length,
     priceChecks: summaryPriceRows.length,
     stockChecks: summaryPriceRows.length,
     missingFields: {
@@ -225,13 +227,16 @@ export default async function UpdatedListPage({
       if (initialTab === "drafts") return updatedListRowIsDraft(row);
       if (initialTab === "mismatches") return updatedListRowNeedsUpdate(row);
       if (initialTab === "specifications") return updatedListRowNeedsSpecifications(row);
-      if (initialTab === "qa") return updatedListRowHasQaReport(row);
+      if (initialTab === "qa") {
+        return updatedListRowHasQaReport(row) || updatedListRowHasSheetDuplicate(row);
+      }
       return false;
     })
     .map((row) => ({
       rowNumber: row.rowNumber,
       sheetRowNumber: row.sheetRowNumber,
       name: row.name,
+      sku: row.sheetSku ?? row.sku,
       wooId: row.wooId,
       wooPermalink: row.wooPermalink,
       wooMatch: row.wooMatch,
@@ -249,7 +254,8 @@ export default async function UpdatedListPage({
       specificationsPresent: row.specificationsPresent,
       qaCustomNotes: compactQaCheck(row.qaCustomNotes),
       qaAccessories: compactQaCheck(row.qaAccessories),
-      qaColour: compactQaCheck(row.qaColour)
+      qaColour: compactQaCheck(row.qaColour),
+      sheetDuplicateMatches: row.sheetDuplicateMatches
     }));
   const priceRows = (initialTab === "prices" ? rows : [])
     .filter(updatedListRowCanCheckPrice)

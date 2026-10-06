@@ -23,6 +23,13 @@ import { getProducts, getStoreCurrency, getStoreTaxSettings, productHasCustomNot
 let updatedListLoadPromise: Promise<UpdatedListData> | undefined;
 let updatedListRefreshPromise: Promise<UpdatedListData> | undefined;
 
+export type UpdatedListSheetDuplicateMatch = {
+  rowNumber: number;
+  name: string;
+  sku: string;
+  matchedBy: Array<"sku" | "name">;
+};
+
 export type UpdatedListRow = {
   rowNumber: number;
   sheetRowNumber: number;
@@ -30,6 +37,7 @@ export type UpdatedListRow = {
   sourceName: string;
   normalizedName: string;
   sku: string;
+  sheetSku: string;
   wooId?: number;
   wooPermalink?: string;
   sourceProductUrl: string;
@@ -78,6 +86,7 @@ export type UpdatedListRow = {
   qaCustomNotes: ProductSheetQaCheck;
   qaAccessories: ProductSheetQaCheck;
   qaColour: ProductSheetQaCheck;
+  sheetDuplicateMatches: UpdatedListSheetDuplicateMatch[];
 };
 
 export type UpdatedListData = {
@@ -177,6 +186,12 @@ export function updatedListRowHasQaReport(
   row: Pick<UpdatedListRow, "qaCustomNotes" | "qaAccessories" | "qaColour">
 ) {
   return row.qaCustomNotes.failed || row.qaAccessories.failed || row.qaColour.failed;
+}
+
+export function updatedListRowHasSheetDuplicate(
+  row: Pick<UpdatedListRow, "sheetDuplicateMatches">
+) {
+  return (row.sheetDuplicateMatches?.length ?? 0) > 0;
 }
 
 export function updatedListRowCanCheckPrice(
@@ -349,6 +364,54 @@ function resolveDuplicateQaRows(rows: UpdatedListRow[]) {
   }
 
   return rows;
+}
+
+function resolveSheetDuplicateRows(rows: UpdatedListRow[]) {
+  const rowsByName = new Map<string, UpdatedListRow[]>();
+  const rowsBySku = new Map<string, UpdatedListRow[]>();
+
+  for (const row of rows) {
+    if (row.normalizedName) {
+      rowsByName.set(row.normalizedName, [...(rowsByName.get(row.normalizedName) ?? []), row]);
+    }
+
+    const normalizedSku = normalizeUpdatedListSku(row.sheetSku ?? row.sku);
+    if (normalizedSku) {
+      rowsBySku.set(normalizedSku, [...(rowsBySku.get(normalizedSku) ?? []), row]);
+    }
+  }
+
+  return rows.map((row) => {
+    const matches = new Map<number, UpdatedListSheetDuplicateMatch>();
+
+    function addMatches(candidates: UpdatedListRow[], matchedBy: "sku" | "name") {
+      for (const candidate of candidates) {
+        if (candidate.sheetRowNumber === row.sheetRowNumber) continue;
+        const existing = matches.get(candidate.sheetRowNumber);
+        matches.set(candidate.sheetRowNumber, {
+          rowNumber: candidate.sheetRowNumber,
+          name: candidate.name,
+          sku: candidate.sheetSku ?? candidate.sku,
+          matchedBy: existing
+            ? [...new Set([...existing.matchedBy, matchedBy])]
+            : [matchedBy]
+        });
+      }
+    }
+
+    const normalizedSku = normalizeUpdatedListSku(row.sheetSku ?? row.sku);
+    if (normalizedSku) addMatches(rowsBySku.get(normalizedSku) ?? [], "sku");
+    if (row.normalizedName) addMatches(rowsByName.get(row.normalizedName) ?? [], "name");
+
+    return {
+      ...row,
+      sheetDuplicateMatches: [...matches.values()].sort((first, second) => first.rowNumber - second.rowNumber)
+    };
+  });
+}
+
+function resolveUpdatedListRows(rows: UpdatedListRow[]) {
+  return resolveSheetDuplicateRows(resolveDuplicateQaRows(rows));
 }
 
 function hasSpecificationsInWoo(product: Pick<WooProduct, "meta_data"> | undefined) {
@@ -539,6 +602,7 @@ async function loadUpdatedListData(): Promise<UpdatedListData> {
         sourceName: name,
         sourceProductUrl: sheetRow.liveUrl,
         normalizedName,
+        sheetSku: sheetRow.sku?.trim() ?? "",
         sku: sheetRow.sku?.trim() || wooProduct?.sku || "",
         wooProduct,
         wooMatch: Boolean(wooProduct),
@@ -633,6 +697,7 @@ async function loadUpdatedListData(): Promise<UpdatedListData> {
       sourceName: row.sourceName,
       normalizedName: row.normalizedName,
       sku: row.sku,
+      sheetSku: row.sheetSku,
       wooId: row.wooProduct?.id,
       wooPermalink: row.wooProduct?.permalink,
       sourceProductUrl: row.sourceProductUrl,
@@ -680,7 +745,8 @@ async function loadUpdatedListData(): Promise<UpdatedListData> {
         present: colourBoard.count > 0,
         count: colourBoard.count,
         names: colourBoard.names
-      })
+      }),
+      sheetDuplicateMatches: []
     };
   });
 
@@ -688,7 +754,7 @@ async function loadUpdatedListData(): Promise<UpdatedListData> {
     updatedAt: new Date().toISOString(),
     currency,
     tax,
-    rows: resolveDuplicateQaRows(rows)
+    rows: resolveUpdatedListRows(rows)
   };
 }
 
@@ -696,7 +762,7 @@ export async function getUpdatedListData() {
   // The explicit Refresh data action owns live synchronization. Keep serving the
   // last successful shared snapshot when WooCommerce is slow or unavailable.
   const cached = await readUpdatedListDataCache<UpdatedListData>(Number.POSITIVE_INFINITY);
-  if (cached) return cached;
+  if (cached) return { ...cached, rows: resolveUpdatedListRows(cached.rows) };
 
   if (!updatedListLoadPromise) {
     updatedListLoadPromise = loadUpdatedListData()
@@ -706,7 +772,7 @@ export async function getUpdatedListData() {
       })
       .catch(async (error) => {
         const stale = await readUpdatedListDataCache<UpdatedListData>(Number.POSITIVE_INFINITY);
-        if (stale) return stale;
+        if (stale) return { ...stale, rows: resolveUpdatedListRows(stale.rows) };
         throw error;
       })
       .finally(() => {
