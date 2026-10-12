@@ -84,6 +84,44 @@ function normalizeIdentitySku(value: string) {
   return value.replace(/[^a-z0-9]/gi, "").toLowerCase();
 }
 
+function identitySkuAliases(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  const aliases = new Set<string>();
+
+  for (const variant of [
+    trimmed,
+    trimmed.replace(/\s*\(\d+(?:-\d+)+\)\s*$/i, ""),
+    trimmed.replace(/-\d{10}-\d{2}$/i, "")
+  ]) {
+    const normalized = normalizeIdentitySku(variant);
+    if (!normalized) continue;
+    aliases.add(normalized);
+    const withoutCatalogPrefix = normalized.replace(/^(?:stk|fcw)/, "");
+    if (withoutCatalogPrefix.length >= 3) aliases.add(withoutCatalogPrefix);
+  }
+
+  return [...aliases];
+}
+
+function productIdentitySkuAliases(product: WooProduct) {
+  const aliases = new Set(identitySkuAliases(product.sku || ""));
+  for (const match of (product.name || "").matchAll(/\(([^()]+)\)/g)) {
+    identitySkuAliases(match[1] || "").forEach((alias) => aliases.add(alias));
+  }
+  for (const item of product.meta_data ?? []) {
+    if (!["_legacy_sku", "_matched_scrape_sku", "_original_staging_sku", "stock_id", "nominal_code"].includes(item.key)) {
+      continue;
+    }
+    identitySkuAliases(String(item.value ?? "")).forEach((alias) => aliases.add(alias));
+  }
+  return aliases;
+}
+
+function productMatchesIdentitySku(product: WooProduct, sku: string) {
+  return identitySkuAliases(sku).some((alias) => productIdentitySkuAliases(product).has(alias));
+}
+
 export function findLikelyDraftProduct(row: SheetProductRow, candidates: WooProduct[]) {
   const sourceTokens = new Set(normalizeIdentityName(row.name).split(" ").filter(Boolean));
   const likelyDrafts = [...new Map(candidates.map((product) => [product.id, product])).values()]
@@ -349,7 +387,11 @@ function bestSkuMatch(products: WooProduct[], sku: string) {
   return products.find((product) => normalizeText(product.sku) === normalizedSku) ?? products[0];
 }
 
-async function matchWooProduct(row: SheetProductRow) {
+type MatchWooProductOptions = {
+  requireSkuMatch?: boolean;
+};
+
+async function matchWooProduct(row: SheetProductRow, options: MatchWooProductOptions = {}) {
   const lookupErrors: string[] = [];
   const candidates: WooProduct[] = [];
 
@@ -369,40 +411,79 @@ async function matchWooProduct(row: SheetProductRow) {
         status: "any"
       });
       candidates.push(...skuResult.data);
+      const exactSkuMatches = skuResult.data.filter(
+        (product) => productMatchesIdentitySku(product, row.sku)
+      );
 
-      if (skuResult.data.length === 1) {
+      if (exactSkuMatches.length === 1) {
         return {
           status: "matched" as const,
           matchMethod: "sku" as const,
-          product: skuResult.data[0],
+          product: exactSkuMatches[0],
           candidates: skuResult.data
         };
       }
 
-      if (skuResult.data.length > 1) {
-        const exactSkuMatches = skuResult.data.filter(
-          (product) => normalizeIdentitySku(product.sku || "") === normalizeIdentitySku(row.sku)
-        );
-
-        if (exactSkuMatches.length === 1) {
-          return {
-            status: "matched" as const,
-            matchMethod: "sku" as const,
-            product: exactSkuMatches[0],
-            candidates: skuResult.data
-          };
-        }
-
+      if (exactSkuMatches.length > 1) {
         return {
           status: "ambiguous" as const,
           matchMethod: "sku" as const,
-          product: bestSkuMatch(skuResult.data, row.sku),
-          candidates: skuResult.data
+          product: bestSkuMatch(exactSkuMatches, row.sku),
+          candidates: exactSkuMatches
         };
       }
     } catch (error) {
       lookupErrors.push(`SKU lookup failed: ${error instanceof Error ? error.message : "WooCommerce request failed."}`);
     }
+  }
+
+  if (row.sku && options.requireSkuMatch) {
+    if (row.name) {
+      try {
+        const nameResult = await getProducts({
+          search: row.name,
+          perPage: 20,
+          status: "any"
+        });
+        candidates.push(...nameResult.data);
+        const identityMatches = nameResult.data.filter((product) =>
+          productMatchesIdentitySku(product, row.sku)
+        );
+
+        if (identityMatches.length === 1) {
+          return {
+            status: "matched" as const,
+            matchMethod: "sku" as const,
+            product: identityMatches[0],
+            candidates: nameResult.data
+          };
+        }
+
+        if (identityMatches.length > 1) {
+          return {
+            status: "ambiguous" as const,
+            matchMethod: "sku" as const,
+            product: bestSkuMatch(identityMatches, row.sku),
+            candidates: identityMatches
+          };
+        }
+      } catch (error) {
+        lookupErrors.push(`Legacy SKU lookup failed: ${error instanceof Error ? error.message : "WooCommerce request failed."}`);
+      }
+    }
+
+    return lookupErrors.length > 0
+      ? {
+          status: "error" as const,
+          matchMethod: "none" as const,
+          candidates: [],
+          error: lookupErrors.join(" ")
+        }
+      : {
+          status: "not_found" as const,
+          matchMethod: "none" as const,
+          candidates: [...new Map(candidates.map((product) => [product.id, product])).values()]
+        };
   }
 
   if (row.name) {
@@ -515,10 +596,14 @@ type ValidateProductSheetRowsOptions = {
   limit?: number;
 };
 
-async function validateRows(rows: SheetProductRow[], categories: WooCategory[]) {
+async function validateRows(
+  rows: SheetProductRow[],
+  categories: WooCategory[],
+  matchOptions: MatchWooProductOptions = {}
+) {
   return mapWithConcurrency(rows, 1, async (row): Promise<ProductSheetValidationResult> => {
     try {
-      const match = await matchWooProduct(row);
+      const match = await matchWooProduct(row, matchOptions);
 
       return {
         row,
@@ -542,7 +627,8 @@ async function validateRows(rows: SheetProductRow[], categories: WooCategory[]) 
 
 export async function validateProductSheetSourceRow(
   rowNumber: number,
-  source: ProductSheetSource = "product-manager"
+  source: ProductSheetSource = "product-manager",
+  options: MatchWooProductOptions = {}
 ) {
   const [row, categories] = await Promise.all([
     source === "updated-list" ? getUpdatedListRow(rowNumber) : getProductSheetRow(rowNumber),
@@ -553,7 +639,7 @@ export async function validateProductSheetSourceRow(
     return undefined;
   }
 
-  return (await validateRows([row], categories))[0];
+  return (await validateRows([row], categories, options))[0];
 }
 
 export async function validateProductSheetRows(options: ValidateProductSheetRowsOptions = {}) {

@@ -7,6 +7,7 @@ import {
   updatedListRowIsMissing,
   updatedListRowHasSheetDuplicate,
   updatedListRowNeedsSpecifications,
+  updatedListRowNeedsSkuFix,
   updatedListRowNeedsPriceUpdate,
   updatedListRowNeedsQa,
   updatedListRowNeedsUpdate
@@ -20,6 +21,8 @@ const refreshScopes = new Set([
   "drafts",
   "mismatches",
   "specifications",
+  "skus",
+  "duplicates",
   "qa",
   "prices",
   "stocks"
@@ -45,6 +48,7 @@ export async function POST(request: Request) {
       missingProducts: data.rows.filter(updatedListRowIsMissing).length,
       draftProducts: data.rows.filter(updatedListRowIsDraft).length,
       specificationsMissing: data.rows.filter(updatedListRowNeedsSpecifications).length,
+      skuFixes: data.rows.filter(updatedListRowNeedsSkuFix).length,
       fieldFixes: data.rows.filter(updatedListRowNeedsUpdate).length,
       qaFailures: data.rows.filter(updatedListRowNeedsQa).length,
       sheetDuplicateRows: data.rows.filter(updatedListRowHasSheetDuplicate).length,

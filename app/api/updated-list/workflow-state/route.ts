@@ -12,6 +12,7 @@ const workflows = new Set<UpdatedListWorkflowKind>([
   "qa-checks",
   "specifications",
   "missing-products",
+  "sku-fixes",
   "price-updates",
   "stock-updates"
 ]);

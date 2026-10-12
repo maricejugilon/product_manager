@@ -7,12 +7,16 @@ import {
 } from "@/lib/product-sheet-fix";
 import {
   parseProductSheetQaCheck,
+  productSheetQaCheckNeedsFix,
+  resolveProductSheetQaCheck,
   type ProductSheetQaCheck,
   type ProductSheetQaField
 } from "@/lib/product-sheet-qa";
 import { parseProductSheetSource } from "@/lib/product-sheet";
 import { validateProductSheetFixTarget, validateProductSheetSourceRow } from "@/lib/product-sheet-validator";
 import { createReview, listReviews } from "@/lib/review-store";
+import type { WooProduct } from "@/lib/types";
+import { getProducts, productHasCustomNotes } from "@/lib/woocommerce";
 
 export const maxDuration = 300;
 
@@ -79,6 +83,91 @@ function overridesFromChecks(checks: ProductSheetQaCheck[]) {
   return overrides;
 }
 
+function productMetaValue(product: WooProduct, key: string) {
+  return product.meta_data?.find((item) => item.key === key)?.value;
+}
+
+function objectArray(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+  }
+  if (typeof value !== "string" || !value.trim()) return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function stringArray(value: unknown) {
+  if (Array.isArray(value)) return value.map(String).map((item) => item.trim()).filter(Boolean);
+  if (typeof value !== "string" || !value.trim()) return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map(String).map((item) => item.trim()).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function currentAccessoryState(product: WooProduct) {
+  const linkedIds = [...new Set([...(product.cross_sell_ids ?? []), ...(product.upsell_ids ?? [])])];
+  const linkedProducts = linkedIds.length > 0
+    ? (await getProducts({
+        include: linkedIds.join(","),
+        perPage: Math.min(100, linkedIds.length),
+        status: "any",
+        fields: "id,name"
+      })).data
+    : [];
+  const nameById = new Map(linkedProducts.map((item) => [item.id, item.name?.trim() ?? ""]));
+  const linkedNames = linkedIds.map((id) => nameById.get(id) ?? "").filter(Boolean);
+  const metadataNames = objectArray(productMetaValue(product, "product_accessories"))
+    .map((item) => String(item.name ?? "").trim())
+    .filter(Boolean);
+  const trackedNames = stringArray(productMetaValue(product, "_fcw_accessory_cross_sell_names"));
+  const names = linkedNames.length === linkedIds.length
+    ? linkedNames
+    : [...new Set([...linkedNames, ...metadataNames, ...trackedNames])];
+
+  return {
+    present: linkedIds.length > 0,
+    count: linkedIds.length,
+    names
+  };
+}
+
+function currentColourState(product: WooProduct) {
+  const rawCount = Number(productMetaValue(product, "personalization_0_image_items") ?? 0);
+  const count = Number.isFinite(rawCount) && rawCount > 0 ? rawCount : 0;
+  const names = Array.from({ length: count }, (_, index) =>
+    String(productMetaValue(product, `personalization_0_image_items_${index}_name`) ?? "").trim()
+  ).filter(Boolean);
+
+  return { present: count > 0, count, names };
+}
+
+async function verifyChecksAgainstWoo(checks: ProductSheetQaCheck[], product: WooProduct) {
+  const needsAccessories = checks.some((check) => check.field === "qa_accessories");
+  const accessories = needsAccessories ? await currentAccessoryState(product) : undefined;
+  const colour = currentColourState(product);
+
+  return checks.map((check) => {
+    if (check.field === "qa_custom_notes") {
+      return resolveProductSheetQaCheck(check, { present: productHasCustomNotes(product) });
+    }
+    if (check.field === "qa_accessories") {
+      return resolveProductSheetQaCheck(check, accessories ?? { present: false, count: 0, names: [] });
+    }
+    return resolveProductSheetQaCheck(check, colour);
+  });
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -129,13 +218,36 @@ export async function POST(request: Request) {
     }
 
     const checks = fieldsToCreate.map((field) => parseProductSheetQaCheck(result.row, field));
-    const activeChecks = checks.filter((check) => check.failed);
+    const reportedChecks = checks.filter((check) => check.failed);
 
-    if (activeChecks.length === 0) {
+    if (reportedChecks.length === 0) {
       return NextResponse.json({
         fields: [],
         skippedFields: fields,
         alreadyMatches: true,
+        warnings: []
+      });
+    }
+
+    const verifiedChecks = await verifyChecksAgainstWoo(reportedChecks, result.product);
+    const alreadyCorrect = verifiedChecks.filter((check) => check.resolved);
+    const activeChecks = verifiedChecks.filter(productSheetQaCheckNeedsFix);
+
+    if (activeChecks.length === 0) {
+      return NextResponse.json({
+        fields: [],
+        verifiedFields: alreadyCorrect.map((check) => check.field),
+        skippedFields: fields,
+        alreadyMatches: true,
+        message: "The spreadsheet still says FAILED, but the current WooCommerce values and counts already match. No review was created.",
+        verification: alreadyCorrect.map((check) => ({
+          field: check.field,
+          label: check.label,
+          expectedCount: check.expectedCount,
+          currentCount: check.currentCount,
+          missing: check.missing,
+          extra: check.extra
+        })),
         warnings: []
       });
     }
@@ -176,6 +288,7 @@ export async function POST(request: Request) {
       return NextResponse.json({
         validated: true,
         fields: activeChecks.map((check) => check.field),
+        verifiedFields: alreadyCorrect.map((check) => check.field),
         counts: { accessories: accessoryCount, colourBoard: colourCount },
         warnings: draft.warnings
       });
@@ -206,6 +319,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       review,
       fields: activeChecks.map((check) => check.field),
+      verifiedFields: alreadyCorrect.map((check) => check.field),
       skippedFields: fields.filter((field) => coveredFields.has(field)),
       warnings: draft.warnings
     }, { status: 201 });

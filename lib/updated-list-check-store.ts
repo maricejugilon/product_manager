@@ -11,6 +11,7 @@ export type UpdatedListWorkflowKind =
   | "qa-checks"
   | "specifications"
   | "missing-products"
+  | "sku-fixes"
   | "price-updates"
   | "stock-updates";
 
@@ -63,7 +64,7 @@ function cacheKey(kind: UpdatedListCheckKind, rowNumber: number) {
 }
 
 function dataCacheKey() {
-  return `${keyPrefix}:${cacheNamespace()}:updated-list:data:v30`;
+  return `${keyPrefix}:${cacheNamespace()}:updated-list:data:v33`;
 }
 
 function workflowKey(workflow: UpdatedListWorkflowKind) {

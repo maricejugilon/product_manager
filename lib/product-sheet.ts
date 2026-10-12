@@ -14,6 +14,7 @@ export type SheetCategoryHierarchy = {
 export type SheetProductRow = {
   rowNumber: number;
   values: Record<string, string>;
+  productCode: string;
   sku: string;
   name: string;
   liveUrl: string;
@@ -27,6 +28,7 @@ type SheetConfig = {
   spreadsheetId: string;
   sheetName: string;
   gid?: string;
+  skuSource?: "legacy-aliases" | "product-code";
 };
 
 const defaultSheetConfig: SheetConfig = {
@@ -37,7 +39,8 @@ const defaultSheetConfig: SheetConfig = {
 
 const updatedListSheetConfig: SheetConfig = {
   spreadsheetId: "1fWu2mxc0LWDUtd_YZQColdkQxwcbsXuihCZ-HcAvlPA",
-  sheetName: "Product list"
+  sheetName: "Product list",
+  skuSource: "product-code"
 };
 
 function normalizeHeader(value: string) {
@@ -179,11 +182,32 @@ function categoryHierarchyFromValues(values: Record<string, string>) {
   }).filter((category) => category.path.length > 0);
 }
 
-function rowFromValues(rowNumber: number, values: Record<string, string>): SheetProductRow {
-  const sku = sheetSku(
-    getValue(values, ["sku", "product sku", "item sku", "stock keeping unit", "product code"]) ||
+function rowFromValues(
+  rowNumber: number,
+  values: Record<string, string>,
+  config: SheetConfig
+): SheetProductRow {
+  const productCode = getValue(values, ["product code"]);
+  const legacySku = sheetSku(
+    getValue(values, [
+      "sku",
+      "_sku",
+      "meta: _sku",
+      "product sku",
+      "item sku",
+      "stock keeping unit",
+      "product code",
+      "product-code",
+      "productcode",
+      "item code",
+      "stock code",
+      "part number"
+    ]) ||
+      findValue(values, ["product", "code"]) ||
+      findValue(values, ["item", "code"]) ||
       findValue(values, ["sku"])
   );
+  const sku = config.skuSource === "product-code" ? productCode : legacySku;
   const name =
     getValue(values, ["name", "product name", "title", "product title"]) ||
     findValue(values, ["product", "name"]) ||
@@ -220,6 +244,7 @@ function rowFromValues(rowNumber: number, values: Record<string, string>): Sheet
   return {
     rowNumber,
     values,
+    productCode,
     sku,
     name,
     liveUrl: normalizeLiveUrl(liveUrl),
@@ -270,7 +295,7 @@ export async function getProductSheetRows(config: SheetConfig = defaultSheetConf
   return dataRows.map((cells, index) => {
     const values = Object.fromEntries(cleanHeaders.map((header, cellIndex) => [header, cells[cellIndex]?.trim() ?? ""]));
 
-    return rowFromValues(index + 2, values);
+    return rowFromValues(index + 2, values, config);
   });
 }
 

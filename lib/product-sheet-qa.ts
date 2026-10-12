@@ -1,3 +1,4 @@
+import { isLikelySiblingProductAccessory } from "@/lib/accessory-name-filter";
 import type { SheetProductRow } from "@/lib/product-sheet";
 
 export type ProductSheetQaField = "qa_custom_notes" | "qa_accessories" | "qa_colour";
@@ -16,6 +17,7 @@ export type ProductSheetQaCheck = {
   extra: string[];
   resolved?: boolean;
   currentCount?: number;
+  currentNames?: string[];
 };
 
 export type ProductSheetQaChecks = {
@@ -48,6 +50,17 @@ function fieldValue(row: SheetProductRow, field: ProductSheetQaField) {
   const accepted = new Set(fieldHeaders[field]);
   const entry = Object.entries(row.values).find(([header]) => accepted.has(normalizeHeader(header)));
   return entry?.[1]?.trim() ?? "";
+}
+
+function explicitBooleanField(row: SheetProductRow, acceptedHeader: string) {
+  const entry = Object.entries(row.values).find(
+    ([header, value]) => normalizeHeader(header) === acceptedHeader && value.trim()
+  );
+  const value = entry?.[1]?.trim() ?? "";
+
+  if (/^(?:yes|true|1)$/i.test(value)) return true;
+  if (/^(?:no|false|0)$/i.test(value)) return false;
+  return undefined;
 }
 
 function sourceColourNames(row: SheetProductRow) {
@@ -117,7 +130,7 @@ function sourceAccessoryNames(row: SheetProductRow) {
       return parsed
         .map((accessory) => String(accessory?.name ?? accessory ?? "").trim())
         .filter(Boolean)
-        .filter((name) => normalizeValue(name) !== normalizeValue(row.name));
+        .filter((name) => !isLikelySiblingProductAccessory(row.name, name));
     }
   } catch {
     // Plain spreadsheet lists are handled below.
@@ -127,7 +140,7 @@ function sourceAccessoryNames(row: SheetProductRow) {
     .split(/\s*\|\s*|\r?\n+/g)
     .map((name) => name.trim())
     .filter(Boolean)
-    .filter((name) => normalizeValue(name) !== normalizeValue(row.name));
+    .filter((name) => !isLikelySiblingProductAccessory(row.name, name));
 }
 
 function listFromSection(value: string) {
@@ -157,8 +170,10 @@ export function parseProductSheetQaCheck(
   const reason = failed
     ? raw.replace(/^\s*\[?\s*fail(?:ed)?\s*\]?\s*(?:[-:]\s*)?/i, "").trim()
     : raw;
-  const expectedBooleanMatch = reason.match(/\bexpected\s+(yes|no)\b/i);
-  const countMatch = reason.match(/\bcount\s+expected\s+(\d+)\s*,\s*found\s+(\d+)\b/i);
+  const expectedBooleanMatch = reason.match(/\bexpected\s*:?\s*(yes|no)\b/i);
+  const countMatch = reason.match(
+    /\bcount\s+expected\s*:?\s*(\d+)\s*(?:[,;]|\r?\n)\s*found\s*:?\s*(\d+)\b/i
+  );
 
   const check: ProductSheetQaCheck = {
     field,
@@ -185,26 +200,41 @@ export function parseProductSheetQaCheck(
 
   if (field === "qa_accessories") {
     const expectedNames = [...new Set(sourceAccessoryNames(row))];
-    const sourceMatchesReportedCount = check.expectedCount !== undefined &&
-      expectedNames.length === check.expectedCount;
+    const sourceExpected = explicitBooleanField(row, "accessories option");
 
-    if (expectedNames.length > 0 && sourceMatchesReportedCount) {
-      const expectedNameSet = new Set(expectedNames.map(normalizeValue));
-      const referencesOutsideSource = check.missing.some(
-        (name) => !expectedNameSet.has(normalizeValue(name))
-      );
-
+    if (sourceExpected === false) {
       return {
         ...check,
-        expectedCount: check.expectedCount ?? expectedNames.length,
+        expectedBoolean: false,
+        expectedCount: 0,
+        expectedNames: [],
+        missing: [],
+        extra: [],
+        reason: "The spreadsheet Accessories field expects no accessories."
+      };
+    }
+
+    if (expectedNames.length > 0) {
+      return {
+        ...check,
+        expectedBoolean: undefined,
+        expectedCount: expectedNames.length,
         expectedNames,
-        missing: check.missing.filter((name) => expectedNameSet.has(normalizeValue(name))),
-        extra: check.extra.filter((name) => !expectedNameSet.has(normalizeValue(name))),
-        ...(referencesOutsideSource
-          ? {
-              reason: `Accessories list contains ${expectedNames.length} expected items; the QA result references names outside that list. Using the spreadsheet Accessories list as the source of truth.`
-            }
-          : {})
+        missing: [],
+        extra: [],
+        reason: `Using ${expectedNames.length} expected items from the spreadsheet Accessories field.`
+      };
+    }
+
+    if (sourceExpected === true) {
+      return {
+        ...check,
+        expectedBoolean: true,
+        expectedCount: undefined,
+        expectedNames: undefined,
+        missing: [],
+        extra: [],
+        reason: "The spreadsheet accessories_option field expects accessories, but the Accessories list is empty."
       };
     }
 
@@ -269,23 +299,39 @@ export function resolveProductSheetQaCheck(
 ): ProductSheetQaCheck {
   if (!check.failed) return check;
 
-  if (check.expectedBoolean !== undefined) {
-    return { ...check, resolved: current.present === check.expectedBoolean, currentCount: current.count };
+  if (check.expectedBoolean !== undefined && check.expectedNames === undefined) {
+    return {
+      ...check,
+      foundCount: current.count,
+      resolved: current.present === check.expectedBoolean,
+      currentCount: current.count,
+      currentNames: current.names ?? []
+    };
   }
 
-  const currentNames = new Set((current.names ?? []).map(normalizeValue));
+  const currentNameByKey = new Map(
+    (current.names ?? []).map((name) => [normalizeValue(name), name] as const).filter(([key]) => key)
+  );
+  const currentNames = new Set(currentNameByKey.keys());
   const countMatches = check.expectedCount === undefined || current.count === check.expectedCount;
   const requiredNames = check.expectedNames ?? check.missing;
-  const missingResolved = requiredNames.every((name) => currentNames.has(normalizeValue(name)));
+  const actualMissing = requiredNames.filter((name) => !currentNames.has(normalizeValue(name)));
   const requiredNameSet = new Set(requiredNames.map(normalizeValue));
-  const effectiveExtras = check.extra.filter((name) => !requiredNameSet.has(normalizeValue(name)));
-  const extrasRemoved = effectiveExtras.every((name) => !currentNames.has(normalizeValue(name)));
-  const hasComparison = check.expectedCount !== undefined || check.missing.length > 0 || check.extra.length > 0;
+  const actualExtra = check.expectedNames
+    ? [...currentNameByKey.entries()]
+        .filter(([key]) => !requiredNameSet.has(key))
+        .map(([, name]) => name)
+    : check.extra.filter((name) => currentNames.has(normalizeValue(name)));
+  const hasComparison = check.expectedCount !== undefined || requiredNames.length > 0 || check.extra.length > 0;
 
   return {
     ...check,
-    resolved: hasComparison && countMatches && missingResolved && extrasRemoved,
-    currentCount: current.count
+    foundCount: current.count,
+    missing: actualMissing,
+    extra: actualExtra,
+    resolved: hasComparison && countMatches && actualMissing.length === 0 && actualExtra.length === 0,
+    currentCount: current.count,
+    currentNames: [...currentNameByKey.values()]
   };
 }
 

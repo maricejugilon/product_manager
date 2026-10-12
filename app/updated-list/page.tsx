@@ -29,6 +29,7 @@ import {
   updatedListRowIsMissing,
   updatedListRowCanCheckPrice,
   updatedListRowNeedsSpecifications,
+  updatedListRowNeedsSkuFix,
   updatedListRowNeedsUpdate,
   updatedListRowNeedsQa,
   updatedListRowHasQaReport,
@@ -70,6 +71,8 @@ function updatedListTab(value: string | undefined): UpdatedListTab {
     value === "drafts" ||
     value === "mismatches" ||
     value === "specifications" ||
+    value === "skus" ||
+    value === "duplicates" ||
     value === "qa" ||
     value === "prices" ||
     value === "stocks"
@@ -78,17 +81,21 @@ function updatedListTab(value: string | undefined): UpdatedListTab {
 }
 
 function compactQaCheck(check: ProductSheetQaCheck): ProductSheetQaCheck {
-  const resolved = Boolean(check.resolved);
-
   return {
     field: check.field,
     label: check.label,
     failed: check.failed,
-    raw: resolved || check.reason ? "" : check.raw,
-    reason: resolved ? "" : check.reason,
-    missing: [],
-    extra: [],
-    resolved: check.resolved
+    raw: check.raw,
+    reason: check.reason,
+    ...(check.expectedBoolean !== undefined ? { expectedBoolean: check.expectedBoolean } : {}),
+    ...(check.expectedCount !== undefined ? { expectedCount: check.expectedCount } : {}),
+    ...(check.expectedNames !== undefined ? { expectedNames: check.expectedNames } : {}),
+    ...(check.foundCount !== undefined ? { foundCount: check.foundCount } : {}),
+    missing: check.missing,
+    extra: check.extra,
+    ...(check.resolved !== undefined ? { resolved: check.resolved } : {}),
+    ...(check.currentCount !== undefined ? { currentCount: check.currentCount } : {}),
+    ...(check.currentNames !== undefined ? { currentNames: check.currentNames } : {})
   };
 }
 
@@ -211,6 +218,7 @@ export default async function UpdatedListPage({
     drafts: rows.filter(updatedListRowIsDraft).length,
     fieldFixes: summaryFieldFixRows.length,
     specifications: rows.filter(updatedListRowNeedsSpecifications).length,
+    skuFixes: rows.filter(updatedListRowNeedsSkuFix).length,
     qaFailures: rows.filter(updatedListRowNeedsQa).length,
     sheetDuplicateRows: rows.filter(updatedListRowHasSheetDuplicate).length,
     priceChecks: summaryPriceRows.length,
@@ -227,9 +235,8 @@ export default async function UpdatedListPage({
       if (initialTab === "drafts") return updatedListRowIsDraft(row);
       if (initialTab === "mismatches") return updatedListRowNeedsUpdate(row);
       if (initialTab === "specifications") return updatedListRowNeedsSpecifications(row);
-      if (initialTab === "qa") {
-        return updatedListRowHasQaReport(row) || updatedListRowHasSheetDuplicate(row);
-      }
+      if (initialTab === "duplicates") return updatedListRowHasSheetDuplicate(row);
+      if (initialTab === "qa") return updatedListRowHasQaReport(row);
       return false;
     })
     .map((row) => ({
@@ -242,6 +249,7 @@ export default async function UpdatedListPage({
       wooMatch: row.wooMatch,
       wooStatus: row.wooStatus,
       ambiguousMatch: row.ambiguousMatch,
+      matchMethod: row.matchMethod,
       wooMatches: row.wooMatches,
       customNotesExpected: row.customNotesExpected,
       colourBoardExpected: row.colourBoardExpected,
@@ -256,6 +264,16 @@ export default async function UpdatedListPage({
       qaAccessories: compactQaCheck(row.qaAccessories),
       qaColour: compactQaCheck(row.qaColour),
       sheetDuplicateMatches: row.sheetDuplicateMatches
+    }));
+  const skuRows = (initialTab === "skus" ? rows : [])
+    .filter(updatedListRowNeedsSkuFix)
+    .map((row) => ({
+      sheetRowNumber: row.sheetRowNumber,
+      name: row.name,
+      wooId: row.wooId!,
+      wooPermalink: row.wooPermalink,
+      currentSku: row.wooSku,
+      newSku: row.sheetSku
     }));
   const priceRows = (initialTab === "prices" ? rows : [])
     .filter(updatedListRowCanCheckPrice)
@@ -433,6 +451,7 @@ export default async function UpdatedListPage({
 
       <UpdatedListActions
         rows={actionRows}
+        skuRows={skuRows}
         priceRows={priceRows}
         stockRows={stockRows}
         currency={data.currency}

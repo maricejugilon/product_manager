@@ -1,5 +1,6 @@
 import "server-only";
 
+import { isLikelySiblingProductAccessory } from "@/lib/accessory-name-filter";
 import { COLOUR_BOARD_CHOICES } from "@/lib/colour-board-choices";
 import { friendlyNetworkError } from "@/lib/network-errors";
 import {
@@ -837,7 +838,10 @@ export function rowAccessories(row: SheetProductRow) {
   const json = safeJsonParse<AccessoryItem>(value).filter((item) => item && typeof item === "object");
 
   if (json.length > 0) {
-    return json;
+    return json.filter((accessory) => {
+      const name = String(accessory.name ?? "").trim();
+      return !name || !isLikelySiblingProductAccessory(row.name, name);
+    });
   }
 
   if (explicitBoolean(value) !== undefined) {
@@ -846,7 +850,7 @@ export function rowAccessories(row: SheetProductRow) {
 
   return pipeValues(value)
     .filter((name) => !/^(?:error|no accessories)$/i.test(name))
-    .filter((name) => normalizeText(name) !== normalizeText(row.name))
+    .filter((name) => !isLikelySiblingProductAccessory(row.name, name))
     .map((name) => ({
       name,
       relationship_type: "recommended",

@@ -7,13 +7,15 @@ import { CheckCircle2, Circle, ExternalLink, FileSpreadsheet, LoaderCircle, Pack
 
 import UpdatedListPriceSync, { type PriceSyncRow } from "@/components/updated-list-price-sync";
 import UpdatedListQaChecks from "@/components/updated-list-qa-checks";
+import UpdatedListSheetDuplicates from "@/components/updated-list-sheet-duplicates";
+import UpdatedListSkuFixes, { type SkuFixRow } from "@/components/updated-list-sku-fixes";
 import UpdatedListStockSync, { type StockSyncRow } from "@/components/updated-list-stock-sync";
 import type { ProductSheetQaCheck } from "@/lib/product-sheet-qa";
 import type { WooStoreCurrency, WooStoreTaxSettings } from "@/lib/types";
 import { loadSharedWorkflow, saveSharedWorkflow } from "@/lib/updated-list-workflow-client";
 
 type FieldFix = "custom_notes" | "colour_board" | "accessories" | "specifications";
-export type UpdatedListTab = "list" | "missing" | "drafts" | "mismatches" | "specifications" | "qa" | "prices" | "stocks";
+export type UpdatedListTab = "list" | "missing" | "drafts" | "mismatches" | "specifications" | "skus" | "duplicates" | "qa" | "prices" | "stocks";
 
 const refreshLabels: Record<UpdatedListTab, string> = {
   list: "all Updated List data",
@@ -21,6 +23,8 @@ const refreshLabels: Record<UpdatedListTab, string> = {
   drafts: "draft products",
   mismatches: "field fixes",
   specifications: "specifications",
+  skus: "SKU fixes",
+  duplicates: "spreadsheet duplicates",
   qa: "QA checks",
   prices: "price product data",
   stocks: "stock product data"
@@ -105,6 +109,7 @@ type UpdatedListRow = {
   wooMatch: boolean;
   wooStatus: string;
   ambiguousMatch: boolean;
+  matchMethod: "sku" | "name" | "none";
   wooMatches?: Array<{
     id: number;
     name: string;
@@ -137,6 +142,7 @@ type UpdatedListSummary = {
   drafts: number;
   fieldFixes: number;
   specifications: number;
+  skuFixes: number;
   qaFailures: number;
   sheetDuplicateRows: number;
   priceChecks: number;
@@ -150,6 +156,7 @@ type UpdatedListSummary = {
 
 export default function UpdatedListActions({
   rows,
+  skuRows,
   priceRows,
   stockRows,
   currency,
@@ -161,6 +168,7 @@ export default function UpdatedListActions({
   initialTab = "list"
 }: {
   rows: UpdatedListRow[];
+  skuRows: SkuFixRow[];
   priceRows: PriceSyncRow[];
   stockRows: StockSyncRow[];
   currency: WooStoreCurrency;
@@ -175,6 +183,7 @@ export default function UpdatedListActions({
   const [activeTab, setActiveTab] = useState<UpdatedListTab>(initialTab);
   const [isChangingTab, setIsChangingTab] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [skuBatchRunning, setSkuBatchRunning] = useState(false);
   const [refreshProgress, setRefreshProgress] = useState(0);
   const [messaging, setMessaging] = useState("");
   const [error, setError] = useState("");
@@ -627,9 +636,12 @@ export default function UpdatedListActions({
     () => rows.filter((row) =>
       row.qaCustomNotes.failed ||
       row.qaAccessories.failed ||
-      row.qaColour.failed ||
-      row.sheetDuplicateMatches.length > 0
+      row.qaColour.failed
     ),
+    [rows]
+  );
+  const sheetDuplicateRows = useMemo(
+    () => rows.filter((row) => row.sheetDuplicateMatches.length > 0),
     [rows]
   );
   function getMismatchFields(row: UpdatedListRow) {
@@ -1493,7 +1505,8 @@ export default function UpdatedListActions({
     draftBatchRunning ||
     mismatchBatchRunning ||
     specificationBatchRunning ||
-    missingProductBatchRunning;
+    missingProductBatchRunning ||
+    skuBatchRunning;
   const visibleBatchProgress = activeTab === "mismatches"
     ? mismatchBatchProgress
       ? { ...mismatchBatchProgress, mode: "mismatch" as const }
@@ -1532,7 +1545,7 @@ export default function UpdatedListActions({
           <div>
             <h2 style={{ margin: 0 }}>Review & create actions</h2>
             <span>
-              {summary.missing} missing products | {summary.drafts} drafts | {summary.fieldFixes} field fixes | {summary.specifications} specifications missing | {summary.qaFailures} QA failures | {summary.sheetDuplicateRows} duplicate sheet rows | {summary.priceChecks} live price checks
+              {summary.missing} missing products | {summary.drafts} drafts | {summary.fieldFixes} field fixes | {summary.specifications} specifications missing | {summary.skuFixes} SKU fixes | {summary.qaFailures} QA failures | {summary.sheetDuplicateRows} duplicate sheet rows | {summary.priceChecks} live price checks
             </span>
             <span className={sharedWorkflowStorage === "error" ? "has-error" : undefined}>
               Data cache: {sharedStorage === "upstash" ? "Shared Upstash" : "Local development"} | Workflows: {sharedWorkflowStorage === "upstash" ? "Shared Upstash" : sharedWorkflowStorage === "local" ? "Local development" : sharedWorkflowStorage === "error" ? "Not shared" : "Connecting"}
@@ -1547,7 +1560,8 @@ export default function UpdatedListActions({
             draftBatchRunning ||
             mismatchBatchRunning ||
             specificationBatchRunning ||
-            missingProductBatchRunning
+            missingProductBatchRunning ||
+            skuBatchRunning
           }
           onClick={() => void refreshData()}
           title={`Refresh ${refreshLabels[activeTab]} from the spreadsheet and WooCommerce. Cached at ${updatedAt}`}
@@ -1603,6 +1617,10 @@ export default function UpdatedListActions({
             label: `Specifications missing (${summary.specifications})${specificationBatchProgress ? ` ${specificationBatchProgress.current}/${specificationBatchProgress.total}` : ""}`
           },
           {
+            id: "skus",
+            label: `SKU fixes (${summary.skuFixes})`
+          },
+          {
             id: "prices",
             label: `Live prices (${summary.priceChecks})`
           },
@@ -1611,8 +1629,12 @@ export default function UpdatedListActions({
             label: `Live stock (${summary.stockChecks})`
           },
           {
+            id: "duplicates",
+            label: `Sheet duplicates (${summary.sheetDuplicateRows})`
+          },
+          {
             id: "qa",
-            label: `QA checks (${summary.qaFailures} failed, ${summary.sheetDuplicateRows} duplicates)`
+            label: `QA checks (${summary.qaFailures})`
           }
         ].map((tab) => (
           <button
@@ -1931,11 +1953,16 @@ export default function UpdatedListActions({
               <p style={{ margin: "6px 0 0", color: "#52607a" }}>Products missing specifications</p>
             </div>
             <div style={{ border: "1px solid #dbe2ea", borderRadius: 10, padding: 12 }}>
+              <strong>{summary.skuFixes}</strong>
+              <p style={{ margin: "6px 0 0", color: "#52607a" }}>Legacy Woo SKUs ready to use the Product Code</p>
+            </div>
+            <div style={{ border: "1px solid #dbe2ea", borderRadius: 10, padding: 12 }}>
               <strong>{summary.qaFailures}</strong>
               <p style={{ margin: "6px 0 0", color: "#52607a" }}>Products with failed spreadsheet QA checks</p>
-              <p style={{ margin: "4px 0 0", color: "#52607a", fontSize: 12 }}>
-                {summary.sheetDuplicateRows} duplicate Product list rows
-              </p>
+            </div>
+            <div style={{ border: "1px solid #dbe2ea", borderRadius: 10, padding: 12 }}>
+              <strong>{summary.sheetDuplicateRows}</strong>
+              <p style={{ margin: "6px 0 0", color: "#52607a" }}>Duplicate Product list rows</p>
             </div>
             <div style={{ border: "1px solid #dbe2ea", borderRadius: 10, padding: 12 }}>
               <strong>{summary.priceChecks}</strong>
@@ -1947,6 +1974,24 @@ export default function UpdatedListActions({
 
       {activeTab === "qa" ? (
         <UpdatedListQaChecks rows={qaRows} />
+      ) : null}
+
+      {activeTab === "duplicates" ? (
+        <UpdatedListSheetDuplicates rows={sheetDuplicateRows} />
+      ) : null}
+
+      {activeTab === "skus" ? (
+        <UpdatedListSkuFixes
+          rows={skuRows}
+          onRunningChange={setSkuBatchRunning}
+          disabled={
+            isRefreshing ||
+            draftBatchRunning ||
+            mismatchBatchRunning ||
+            specificationBatchRunning ||
+            missingProductBatchRunning
+          }
+        />
       ) : null}
 
       {activeTab === "prices" ? (

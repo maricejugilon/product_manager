@@ -76,6 +76,7 @@ export type WooProduct = {
   stock_quantity: number | null;
   categories: WooProductCategory[];
   cross_sell_ids?: number[];
+  upsell_ids?: number[];
   tags?: Array<{ id: number; name?: string; slug?: string }>;
   images: WooProductImage[];
   short_description: string;

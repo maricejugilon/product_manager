@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 
 import { buildProductCreateDraft } from "@/lib/product-sheet-create";
-import { parseProductSheetSource } from "@/lib/product-sheet";
+import { getUpdatedListRows, parseProductSheetSource } from "@/lib/product-sheet";
 import { findLikelyDraftProduct, validateProductSheetSourceRow } from "@/lib/product-sheet-validator";
 import { createReview, listReviews, patchReview } from "@/lib/review-store";
+import {
+  getUpdatedListData,
+  normalizeUpdatedListProductName,
+  normalizeUpdatedListSku
+} from "@/lib/updated-list";
 
 export const maxDuration = 300;
 
@@ -22,6 +27,26 @@ export async function POST(request: Request) {
     const body = await request.json();
     const rowNumber = rowNumberFromBody(body.rowNumber);
     const sheetSource = parseProductSheetSource(body.source);
+
+    if (sheetSource === "updated-list") {
+      const identityRow = (await getUpdatedListData()).rows.find(
+        (row) => row.sheetRowNumber === rowNumber
+      );
+
+      if (identityRow?.wooMatch || identityRow?.ambiguousMatch) {
+        return NextResponse.json(
+          {
+            error: identityRow.ambiguousMatch
+              ? "This spreadsheet row has multiple WooCommerce matches. Resolve the matches before creating a product."
+              : `This product already exists in WooCommerce${identityRow.wooStatus ? ` with status ${identityRow.wooStatus}` : ""}. Refresh Missing Products to load its current status.`,
+            productId: identityRow.wooId,
+            productStatus: identityRow.wooStatus
+          },
+          { status: 409 }
+        );
+      }
+    }
+
     const reviews = await listReviews();
     const existingCreateReview = reviews.find((review) => {
       const before = review.before as { row?: { rowNumber?: number }; sheetSource?: string } | null;
@@ -35,10 +60,52 @@ export async function POST(request: Request) {
       );
     });
 
-    const result = await validateProductSheetSourceRow(rowNumber, sheetSource);
+    const result = await validateProductSheetSourceRow(rowNumber, sheetSource, {
+      requireSkuMatch: true
+    });
 
     if (!result) {
       return NextResponse.json({ error: "Sheet row was not found." }, { status: 404 });
+    }
+
+    if (sheetSource === "updated-list" && !result.row.productCode.trim()) {
+      return NextResponse.json(
+        { error: "This Product list row does not have a value in the Product code field." },
+        { status: 400 }
+      );
+    }
+
+    if (sheetSource === "updated-list" && result.row.productCode) {
+      const normalizedSku = normalizeUpdatedListSku(result.row.productCode);
+      const duplicateSkuRows = (await getUpdatedListRows()).filter(
+        (row) => normalizeUpdatedListSku(row.productCode || "") === normalizedSku
+      );
+
+      if (duplicateSkuRows.length > 1) {
+        const distinctNames = new Set(
+          duplicateSkuRows.map((row) => normalizeUpdatedListProductName(row.name || ""))
+        );
+
+        if (distinctNames.size > 1) {
+          return NextResponse.json(
+            {
+              error: `Product Code ${result.row.productCode} is used by multiple spreadsheet product names. Resolve it in Sheet Duplicates before creating a product.`
+            },
+            { status: 409 }
+          );
+        }
+
+        const canonicalRow = Math.min(...duplicateSkuRows.map((row) => row.rowNumber));
+        if (rowNumber !== canonicalRow) {
+          return NextResponse.json(
+            {
+              error: `This is a duplicate spreadsheet row. Use sheet row ${canonicalRow} to create Product Code ${result.row.productCode}.`,
+              canonicalRow
+            },
+            { status: 409 }
+          );
+        }
+      }
     }
 
     const matchedProductStatus = String(result.product?.status ?? "").trim().toLowerCase();

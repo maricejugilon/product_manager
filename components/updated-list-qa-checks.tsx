@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Circle, ExternalLink, Files, GitMerge, LoaderCircle, Pause, Play, RotateCcw, Square, SquarePen, Wrench, XCircle } from "lucide-react";
+import { CheckCircle2, Circle, ExternalLink, GitMerge, LoaderCircle, Pause, Play, RotateCcw, Square, SquarePen, Wrench, XCircle } from "lucide-react";
 
 import { productSheetQaCheckNeedsFix, type ProductSheetQaCheck, type ProductSheetQaField } from "@/lib/product-sheet-qa";
 import { loadSharedWorkflow, saveSharedWorkflow } from "@/lib/updated-list-workflow-client";
@@ -15,6 +15,7 @@ export type UpdatedListQaRow = {
   wooPermalink?: string;
   wooMatch: boolean;
   ambiguousMatch: boolean;
+  matchMethod: "sku" | "name" | "none";
   wooMatches?: Array<{
     id: number;
     name: string;
@@ -25,12 +26,6 @@ export type UpdatedListQaRow = {
   qaCustomNotes: ProductSheetQaCheck;
   qaAccessories: ProductSheetQaCheck;
   qaColour: ProductSheetQaCheck;
-  sheetDuplicateMatches: Array<{
-    rowNumber: number;
-    name: string;
-    sku: string;
-    matchedBy: Array<"sku" | "name">;
-  }>;
 };
 
 type QueueItem = {
@@ -40,7 +35,7 @@ type QueueItem = {
   productId?: number;
   wooUrl?: string;
   fields: ProductSheetQaField[];
-  status: "pending" | "processing" | "completed" | "failed";
+  status: "pending" | "processing" | "completed" | "verified" | "failed";
   message: string;
 };
 
@@ -54,6 +49,18 @@ const storageKey = "updated-list-qa-checks-v1";
 
 function checksForRow(row: UpdatedListQaRow) {
   return [row.qaCustomNotes, row.qaAccessories, row.qaColour].filter(productSheetQaCheckNeedsFix);
+}
+
+function reportedChecksForRow(row: UpdatedListQaRow) {
+  return [row.qaCustomNotes, row.qaAccessories, row.qaColour].filter((check) => check.failed);
+}
+
+function verifiedChecksForRow(row: UpdatedListQaRow) {
+  return reportedChecksForRow(row).filter((check) => check.resolved);
+}
+
+function queueItemFinished(item: QueueItem) {
+  return item.status === "completed" || item.status === "verified" || item.status === "failed";
 }
 
 function checkForField(row: UpdatedListQaRow, field: ProductSheetQaField) {
@@ -75,17 +82,32 @@ function warningSummary(warnings: string[] | undefined) {
     : warnings.join("; ");
 }
 
-export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[] }) {
-  const failedRows = useMemo(() => rows.filter((row) => checksForRow(row).length > 0), [rows]);
-  const [duplicateLimit, setDuplicateLimit] = useState(50);
-  const duplicateRows = useMemo(
-    () => rows
-      .filter((row) => row.sheetDuplicateMatches.length > 0)
-      .sort((first, second) => first.sheetRowNumber - second.sheetRowNumber),
-    [rows]
+function QaAccessoryComparison({ check }: { check: ProductSheetQaCheck }) {
+  if (check.field !== "qa_accessories") return null;
+
+  return (
+    <div style={{ display: "grid", gap: 4, marginTop: 7, fontSize: 12 }}>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <span><strong>Expected from Accessories:</strong> {check.expectedCount ?? (check.expectedBoolean ? "Yes" : "No")}</span>
+        <span><strong>Found in Woo:</strong> {check.currentCount ?? check.foundCount ?? 0}</span>
+      </div>
+      <div style={{ color: check.missing.length > 0 ? "#b91c1c" : "#15803d", overflowWrap: "anywhere" }}>
+        <strong>Missing ({check.missing.length}):</strong> {check.missing.length > 0 ? check.missing.join(" | ") : "None"}
+      </div>
+      <div style={{ color: check.extra.length > 0 ? "#b91c1c" : "#15803d", overflowWrap: "anywhere" }}>
+        <strong>Extra ({check.extra.length}):</strong> {check.extra.length > 0 ? check.extra.join(" | ") : "None"}
+      </div>
+      <div style={{ color: "#64748b" }}>Woo count includes unique cross-sells and upsells.</div>
+    </div>
   );
-  const visibleDuplicateRows = duplicateRows.slice(0, duplicateLimit);
+}
+
+export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[] }) {
+  const reportedRows = useMemo(() => rows.filter((row) => reportedChecksForRow(row).length > 0), [rows]);
+  const failedRows = useMemo(() => rows.filter((row) => checksForRow(row).length > 0), [rows]);
+  const verifiedRows = useMemo(() => rows.filter((row) => verifiedChecksForRow(row).length > 0), [rows]);
   const [filter, setFilter] = useState<"all" | ProductSheetQaField>("all");
+  const [resultFilter, setResultFilter] = useState<"needs_fix" | "verified" | "all">("needs_fix");
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [progress, setProgress] = useState<Record<number, Progress>>({});
   const [mergeTargetByRow, setMergeTargetByRow] = useState<Record<number, number>>({});
@@ -100,27 +122,40 @@ export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[]
   const controlRef = useRef({ paused: false, stopped: false });
 
   const visibleRows = useMemo(
-    () => filter === "all"
-      ? failedRows
-      : failedRows.filter((row) => checksForRow(row).some((check) => check.field === filter)),
-    [failedRows, filter]
+    () => {
+      const statusRows = resultFilter === "needs_fix"
+        ? failedRows
+        : resultFilter === "verified"
+          ? verifiedRows
+          : reportedRows;
+      return filter === "all"
+        ? statusRows
+        : statusRows.filter((row) => {
+            const checks = resultFilter === "needs_fix"
+              ? checksForRow(row)
+              : resultFilter === "verified"
+                ? verifiedChecksForRow(row)
+                : reportedChecksForRow(row);
+            return checks.some((check) => check.field === filter);
+          });
+    },
+    [failedRows, filter, reportedRows, resultFilter, verifiedRows]
   );
   const fixableVisibleRows = useMemo(
-    () => visibleRows.filter((row) => row.wooMatch && !row.ambiguousMatch),
-    [visibleRows]
+    () => visibleRows.filter((row) =>
+      row.wooMatch &&
+      !row.ambiguousMatch &&
+      checksForRow(row).some((check) => filter === "all" || check.field === filter)
+    ),
+    [filter, visibleRows]
   );
   const counts = useMemo(() => ({
     all: failedRows.length,
-    qa_custom_notes: failedRows.filter((row) => row.qaCustomNotes.failed).length,
-    qa_accessories: failedRows.filter((row) => row.qaAccessories.failed).length,
-    qa_colour: failedRows.filter((row) => row.qaColour.failed).length
+    qa_custom_notes: failedRows.filter((row) => productSheetQaCheckNeedsFix(row.qaCustomNotes)).length,
+    qa_accessories: failedRows.filter((row) => productSheetQaCheckNeedsFix(row.qaAccessories)).length,
+    qa_colour: failedRows.filter((row) => productSheetQaCheckNeedsFix(row.qaColour)).length
   }), [failedRows]);
-  const resolvedCount = useMemo(
-    () => rows.filter((row) =>
-      [row.qaCustomNotes, row.qaAccessories, row.qaColour].some((check) => check.failed && check.resolved)
-    ).length,
-    [rows]
-  );
+  const resolvedCount = verifiedRows.length;
 
   function saveQueue(items: QueueItem[]) {
     queueRef.current = items;
@@ -154,11 +189,11 @@ export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[]
     void loadSharedWorkflow<QueueItem>("qa-checks")
       .then((payload) => {
         if (!active) return;
-        const items = payload.state?.items?.length ? restore(payload.state.items) : restoredLocal;
+        const items = payload.state ? restore(payload.state.items) : restoredLocal;
         queueRef.current = items;
         setQueue(items);
         window.localStorage.setItem(storageKey, JSON.stringify(items));
-        const current = items.filter((item) => item.status === "completed" || item.status === "failed").length;
+        const current = items.filter(queueItemFinished).length;
         if (items.some((item) => item.status === "pending")) {
           controlRef.current = { paused: false, stopped: true };
           setBatch({ total: items.length, current, paused: false, stopped: true });
@@ -230,6 +265,8 @@ export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[]
         alreadyExists?: boolean;
         alreadyMatches?: boolean;
         error?: string;
+        message?: string;
+        verifiedFields?: ProductSheetQaField[];
         warnings?: string[];
       };
 
@@ -237,7 +274,7 @@ export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[]
       const resultMessage = payload.alreadyExists
         ? "Already in the Review Queue."
         : payload.alreadyMatches
-          ? "The spreadsheet no longer reports this QA failure."
+          ? payload.message || "WooCommerce already matches the expected value. No review was created."
           : payload.warnings?.length
             ? `Review created with warnings: ${warningSummary(payload.warnings)}`
             : "QA fix sent to the Review Queue.";
@@ -246,7 +283,7 @@ export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[]
         [row.sheetRowNumber]: { progress: 100, state: "success", message: resultMessage }
       }));
       setMessage(resultMessage);
-      return { success: true, message: resultMessage };
+      return { success: true, verified: Boolean(payload.alreadyMatches), message: resultMessage };
     } catch (caught) {
       const resultMessage = caught instanceof Error ? caught.message : "Could not create the QA fix review.";
       setProgress((current) => ({
@@ -254,7 +291,7 @@ export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[]
         [row.sheetRowNumber]: { progress: 0, state: "error", message: resultMessage }
       }));
       setError(resultMessage);
-      return { success: false, message: resultMessage };
+      return { success: false, verified: false, message: resultMessage };
     } finally {
       if (timer) clearInterval(timer);
     }
@@ -401,7 +438,7 @@ export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[]
     controlRef.current = { paused: false, stopped: false };
     setBatch({
       total: queueRef.current.length,
-      current: queueRef.current.filter((item) => item.status === "completed" || item.status === "failed").length,
+      current: queueRef.current.filter(queueItemFinished).length,
       paused: false,
       stopped: false
     });
@@ -426,19 +463,20 @@ export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[]
       updateQueueItem(current.id, { status: "processing", message: "Preparing QA fix review..." });
       const result = await createQaReview(row, current.fields);
       updateQueueItem(current.id, {
-        status: result.success ? "completed" : "failed",
+        status: result.success ? (result.verified ? "verified" : "completed") : "failed",
         message: result.message
       });
       setBatch((value) => value ? {
         ...value,
-        current: queueRef.current.filter((item) => item.status === "completed" || item.status === "failed").length
+        current: queueRef.current.filter(queueItemFinished).length
       } : value);
     }
 
     const failed = queueRef.current.filter((item) => item.status === "failed").length;
     const completed = queueRef.current.filter((item) => item.status === "completed").length;
+    const verified = queueRef.current.filter((item) => item.status === "verified").length;
     setBatch(null);
-    setMessage(`QA update finished: ${completed} sent to Review Queue${failed ? `, ${failed} failed` : ""}.`);
+    setMessage(`QA check finished: ${completed} sent to Review Queue${verified ? `, ${verified} already correct` : ""}${failed ? `, ${failed} failed` : ""}.`);
   }
 
   function retryFailed() {
@@ -458,13 +496,30 @@ export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[]
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
         <div>
           <p style={{ margin: 0, color: "#52607a" }}>
-            Failed QA results come directly from the Product list spreadsheet. Fixes are sent to Review Queue before WooCommerce changes.
+            Spreadsheet QA failures are checked against current WooCommerce values and counts. Already-correct products are verified and skipped.
           </p>
           {resolvedCount > 0 ? (
             <p style={{ margin: "5px 0 0", color: "#15803d", fontSize: 12 }}>
               {resolvedCount} spreadsheet QA row{resolvedCount === 1 ? "" : "s"} now match WooCommerce after refresh.
             </p>
           ) : null}
+          <div className="tab-list" style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+            {([
+              ["needs_fix", `Needs fix (${failedRows.length})`],
+              ["verified", `Already correct (${verifiedRows.length})`],
+              ["all", `All reported (${reportedRows.length})`]
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                className="button secondary compact-button"
+                type="button"
+                onClick={() => setResultFilter(value)}
+                style={{ borderColor: resultFilter === value ? "#2563eb" : undefined, fontWeight: resultFilter === value ? 700 : 500 }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <div className="tab-list" style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
             {([
               ["all", `All (${counts.all})`],
@@ -494,78 +549,6 @@ export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[]
           Fix all ready ({fixableVisibleRows.length})
         </button>
       </div>
-
-      <section style={{ borderTop: "1px solid #dbe2ea", borderBottom: "1px solid #dbe2ea", padding: "14px 0", display: "grid", gap: 10 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ display: "flex", gap: 9, alignItems: "center" }}>
-            <Files size={18} />
-            <div>
-              <strong>Spreadsheet duplicates ({duplicateRows.length})</strong>
-              <div style={{ color: "#52607a", fontSize: 12, marginTop: 2 }}>
-                Exact Product list matches by SKU or normalized product name.
-              </div>
-            </div>
-          </div>
-          <a
-            className="button secondary compact-button"
-            href="https://docs.google.com/spreadsheets/d/1fWu2mxc0LWDUtd_YZQColdkQxwcbsXuihCZ-HcAvlPA/edit"
-            target="_blank"
-            rel="noreferrer"
-          >
-            <ExternalLink size={13} /> Open Product list
-          </a>
-        </div>
-
-        {duplicateRows.length === 0 ? (
-          <p className="subtle" style={{ margin: 0 }}>No duplicate SKU or product-name rows were detected.</p>
-        ) : (
-          <div style={{ display: "grid", gap: 8, maxHeight: 420, overflowY: "auto", paddingRight: 4 }}>
-            {visibleDuplicateRows.map((row) => (
-              <div
-                key={`sheet-duplicate-${row.sheetRowNumber}`}
-                style={{ border: "1px solid #dbe2ea", borderRadius: 8, padding: "11px 12px", background: "#f9fafb", display: "grid", gap: 7 }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
-                  <div style={{ minWidth: 0 }}>
-                    <strong style={{ overflowWrap: "anywhere" }}>{row.name}</strong>
-                    <div style={{ color: "#52607a", fontSize: 12, marginTop: 3 }}>
-                      Sheet row {row.sheetRowNumber} | SKU: {row.sku || "No SKU"}
-                    </div>
-                  </div>
-                  <span className="status failed">Duplicate row</span>
-                </div>
-                <div style={{ display: "grid", gap: 5 }}>
-                  {row.sheetDuplicateMatches.map((match) => (
-                    <div key={`${row.sheetRowNumber}-${match.rowNumber}`} style={{ color: "#52607a", fontSize: 12, overflowWrap: "anywhere" }}>
-                      <strong>Matches row {match.rowNumber}</strong>: {match.name}
-                      {match.sku ? ` | SKU: ${match.sku}` : ""}
-                      {` | Same ${match.matchedBy.map((reason) => reason === "sku" ? "SKU" : "product name").join(" and ")}`}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-            {visibleDuplicateRows.length < duplicateRows.length ? (
-              <div style={{ display: "flex", justifyContent: "center", gap: 8, paddingTop: 4, flexWrap: "wrap" }}>
-                <button
-                  className="button secondary compact-button"
-                  type="button"
-                  onClick={() => setDuplicateLimit((current) => Math.min(current + 50, duplicateRows.length))}
-                >
-                  Show 50 more
-                </button>
-                <button
-                  className="button secondary compact-button"
-                  type="button"
-                  onClick={() => setDuplicateLimit(duplicateRows.length)}
-                >
-                  Show all {duplicateRows.length}
-                </button>
-              </div>
-            ) : null}
-          </div>
-        )}
-      </section>
 
       {(batch || queue.length > 0) ? (
         <div style={{ border: "1px solid #dbe2ea", borderRadius: 8, padding: 12, background: "#f8fafc" }}>
@@ -618,18 +601,18 @@ export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[]
           <div style={{ marginTop: 10, maxHeight: 260, overflowY: "auto" }}>
             {queue.map((item) => (
               <div key={item.id} style={{ display: "grid", gridTemplateColumns: "22px minmax(0, 1fr) auto", gap: 8, alignItems: "center", padding: "8px 0", borderBottom: "1px solid #e5e7eb" }}>
-                {item.status === "completed" ? <CheckCircle2 size={16} color="#15803d" /> : item.status === "failed" ? <XCircle size={16} color="#b91c1c" /> : item.status === "processing" ? <LoaderCircle size={16} color="#2563eb" /> : <Circle size={16} color="#64748b" />}
+                {item.status === "completed" || item.status === "verified" ? <CheckCircle2 size={16} color="#15803d" /> : item.status === "failed" ? <XCircle size={16} color="#b91c1c" /> : item.status === "processing" ? <LoaderCircle size={16} color="#2563eb" /> : <Circle size={16} color="#64748b" />}
                 <div style={{ minWidth: 0 }}>
                   <strong style={{ fontSize: 13 }}>{item.name}</strong>
                   <div style={{ fontSize: 12, color: item.status === "failed" ? "#b91c1c" : "#52607a" }}>{item.message}</div>
-                  {item.status === "completed" ? (
+                  {item.status === "completed" || item.status === "verified" ? (
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
                       {item.wooUrl ? <a className="button secondary compact-button" href={item.wooUrl} target="_blank" rel="noreferrer"><ExternalLink size={12} /> WooCommerce</a> : null}
                       {item.productId ? <Link className="button secondary compact-button" href={`/products/${item.productId}`}><SquarePen size={12} /> Product Manager</Link> : null}
                     </div>
                   ) : null}
                 </div>
-                <span className={`status ${item.status === "completed" ? "approved" : item.status === "failed" ? "failed" : "neutral"}`}>{item.status}</span>
+                <span className={`status ${item.status === "completed" || item.status === "verified" ? "approved" : item.status === "failed" ? "failed" : "neutral"}`}>{item.status === "verified" ? "already correct" : item.status}</span>
               </div>
             ))}
           </div>
@@ -644,7 +627,12 @@ export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[]
       ) : (
         <div style={{ display: "grid", gap: 8 }}>
           {visibleRows.map((row) => {
-            const checks = checksForRow(row).filter((check) => filter === "all" || check.field === filter);
+            const statusChecks = resultFilter === "needs_fix"
+              ? checksForRow(row)
+              : resultFilter === "verified"
+                ? verifiedChecksForRow(row)
+                : reportedChecksForRow(row);
+            const checks = statusChecks.filter((check) => filter === "all" || check.field === filter);
             const rowProgress = progress[row.sheetRowNumber];
             const queuedFields = new Set(
               queue
@@ -751,17 +739,35 @@ export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[]
                     <div key={check.field} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", borderTop: "1px solid #e5e7eb", paddingTop: 8 }}>
                       <strong style={{ fontSize: 13, flex: "0 1 150px" }}>{check.label}</strong>
                       <div style={{ minWidth: 0, flex: "1 1 260px" }}>
-                        <span className="status failed">Failed</span>
-                        <div style={{ color: "#52607a", fontSize: 12, marginTop: 4, overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{check.reason || check.raw}</div>
+                        <span className={`status ${check.resolved ? "approved" : "failed"}`}>
+                          {check.resolved ? "Already correct in Woo" : "Needs fix"}
+                        </span>
+                        <div style={{ color: "#52607a", fontSize: 12, marginTop: 4, overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>
+                          {check.resolved
+                            ? `Spreadsheet says FAILED, but WooCommerce matches${check.expectedCount !== undefined ? ` the expected count of ${check.expectedCount}` : " the expected value"}. No update needed.`
+                            : check.reason || check.raw}
+                        </div>
+                        <QaAccessoryComparison check={check} />
+                        {check.raw.trim() ? (
+                          <div style={{ borderTop: "1px solid #e5e7eb", color: "#52607a", fontSize: 12, marginTop: 8, paddingTop: 7, overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>
+                            <strong style={{ color: "#334155" }}>Spreadsheet QA note:</strong> {check.raw}
+                          </div>
+                        ) : null}
                       </div>
-                      <button
-                        className="button secondary compact-button"
-                        type="button"
-                        disabled={cannotFix || rowProgress?.state === "running" || Boolean(batch && !batch.stopped) || queuedFields.has(check.field)}
-                        onClick={() => void createQaReview(row, [check.field])}
-                      >
-                        <Wrench size={13} /> {queuedFields.has(check.field) ? "In Review Queue" : `Fix ${check.label}`}
-                      </button>
+                      {check.resolved ? (
+                        <span style={{ color: "#15803d", fontSize: 12, fontWeight: 700 }}>
+                          {check.currentCount !== undefined ? `Woo count: ${check.currentCount}` : "Verified from WooCommerce"}
+                        </span>
+                      ) : (
+                        <button
+                          className="button secondary compact-button"
+                          type="button"
+                          disabled={cannotFix || rowProgress?.state === "running" || Boolean(batch && !batch.stopped) || queuedFields.has(check.field)}
+                          onClick={() => void createQaReview(row, [check.field])}
+                        >
+                          <Wrench size={13} /> {queuedFields.has(check.field) ? "In Review Queue" : `Fix ${check.label}`}
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
