@@ -261,6 +261,7 @@ export default async function UpdatedListPage({
       accessoriesPresent: row.accessoriesPresent,
       specificationsPresent: row.specificationsPresent,
       qaCustomNotes: compactQaCheck(row.qaCustomNotes),
+      sourceProductUrl: row.sourceProductUrl,
       qaAccessories: compactQaCheck(row.qaAccessories),
       qaColour: compactQaCheck(row.qaColour),
       sheetDuplicateMatches: row.sheetDuplicateMatches

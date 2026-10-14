@@ -553,9 +553,7 @@ export async function validateProductSheetFixTarget(
   }
 
   const skuMatches = Boolean(
-    row.sku &&
-    product.sku &&
-    normalizeIdentitySku(row.sku) === normalizeIdentitySku(product.sku)
+    row.sku && productMatchesIdentitySku(product, row.sku)
   );
   const nameMatches = Boolean(
     row.name &&
@@ -564,7 +562,8 @@ export async function validateProductSheetFixTarget(
   );
 
   if (!skuMatches && !nameMatches) {
-    throw new Error("The selected WooCommerce product no longer matches this Product Manager row.");
+    const sourceLabel = source === "updated-list" ? "Product list" : "Product Manager";
+    throw new Error(`The selected WooCommerce product no longer matches this ${sourceLabel} row. Refresh data before retrying.`);
   }
 
   return {

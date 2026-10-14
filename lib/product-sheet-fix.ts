@@ -193,7 +193,9 @@ export async function buildProductSheetFix(
   }
 
   if (fields.includes("colour_board")) {
-    const expected = overrides.colourBoardExpected ?? sheetColourBoardExpected(row);
+    const expected = overrides.colourBoardExpectedCount === 0
+      ? false
+      : overrides.colourBoardExpected ?? sheetColourBoardExpected(row);
     const sheetOptions = expected
       ? uniqueByName([
           ...rowColourOptions(row),

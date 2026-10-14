@@ -13,6 +13,7 @@ export type UpdatedListQaRow = {
   sku: string;
   wooId?: number;
   wooPermalink?: string;
+  sourceProductUrl?: string;
   wooMatch: boolean;
   ambiguousMatch: boolean;
   matchMethod: "sku" | "name" | "none";
@@ -105,7 +106,9 @@ function QaAccessoryComparison({ check }: { check: ProductSheetQaCheck }) {
 export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[] }) {
   const reportedRows = useMemo(() => rows.filter((row) => reportedChecksForRow(row).length > 0), [rows]);
   const failedRows = useMemo(() => rows.filter((row) => checksForRow(row).length > 0), [rows]);
-  const verifiedRows = useMemo(() => rows.filter((row) => verifiedChecksForRow(row).length > 0), [rows]);
+  const verifiedRows = useMemo(() => rows.filter((row) =>
+    row.wooMatch && !row.ambiguousMatch && verifiedChecksForRow(row).length > 0
+  ), [rows]);
   const [filter, setFilter] = useState<"all" | ProductSheetQaField>("all");
   const [resultFilter, setResultFilter] = useState<"needs_fix" | "verified" | "all">("needs_fix");
   const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -621,6 +624,47 @@ export default function UpdatedListQaChecks({ rows }: { rows: UpdatedListQaRow[]
 
       {message ? <p className="success" style={{ margin: 0 }}>{message}</p> : null}
       {error ? <p className="error" style={{ margin: 0 }}>{error}</p> : null}
+
+      <section aria-label="Ready for QA revalidation" style={{ border: "1px solid #bbf7d0", borderRadius: 8, padding: 14, background: "#f0fdf4", display: "grid", gap: 10 }}>
+        <div>
+          <h2 style={{ fontSize: 16, margin: 0 }}>Ready for QA revalidation ({verifiedRows.length})</h2>
+          <p style={{ margin: "5px 0 0", fontSize: 13, color: "#52607a" }}>
+            These products still have FAILED checks in the spreadsheet, but the checks listed below now match WooCommerce. Compare both product pages and update the spreadsheet QA result after rechecking.
+          </p>
+        </div>
+        {verifiedRows.length === 0 ? <p className="subtle" style={{ margin: 0 }}>No corrected checks are waiting for revalidation. Refresh data after applying fixes.</p> : (
+          <div style={{ display: "grid", gap: 8, maxHeight: 480, overflowY: "auto" }}>
+            {verifiedRows.map((row) => {
+              const remainingChecks = checksForRow(row);
+              return (
+                <div key={`revalidate-${row.sheetRowNumber}`} style={{ border: "1px solid #dbe2ea", borderRadius: 8, background: "#fff", padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ flex: "1 1 260px" }}>
+                    <strong>{row.name}</strong>
+                    <div style={{ fontSize: 12, color: "#52607a", marginTop: 4 }}>Sheet row {row.sheetRowNumber}{row.sku ? ` | SKU: ${row.sku}` : ""}</div>
+                    <div style={{ fontSize: 12, color: "#15803d", marginTop: 4 }}>Correct in Woo: {verifiedChecksForRow(row).map((check) => check.label).join(", ")}</div>
+                    {remainingChecks.length > 0 ? <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 4 }}>Still needs fixing: {remainingChecks.map((check) => check.label).join(", ")}</div> : null}
+                    {reportedChecksForRow(row).map((check) => (
+                      <div key={check.field} style={{ borderTop: "1px solid #e5e7eb", paddingTop: 7, marginTop: 7, fontSize: 12 }}>
+                        <strong>{check.label} — spreadsheet FAILED note</strong>
+                        <span style={{ marginLeft: 6, color: check.resolved ? "#15803d" : "#b91c1c" }}>
+                          {check.resolved ? "Correct in Woo" : "Still needs fixing"}
+                        </span>
+                        <div style={{ marginTop: 4, color: "#52607a", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                          {check.raw.trim() || "No spreadsheet note provided."}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {row.sourceProductUrl ? <a className="button secondary compact-button" href={row.sourceProductUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} /> Live product</a> : <span className="subtle">Live link unavailable</span>}
+                    {row.wooPermalink ? <a className="button secondary compact-button" href={row.wooPermalink} target="_blank" rel="noreferrer"><ExternalLink size={13} /> WooCommerce</a> : <span className="subtle">WooCommerce link unavailable</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       {visibleRows.length === 0 ? (
         <p className="subtle">No failed QA checks in this view.</p>

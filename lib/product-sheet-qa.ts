@@ -245,6 +245,20 @@ export function parseProductSheetQaCheck(
     return check;
   }
 
+  // An explicit absence must win over any stale colour list in the sheet.
+  if (check.expectedCount === 0 || check.expectedBoolean === false ||
+      explicitBooleanField(row, "colour option") === false ||
+      explicitBooleanField(row, "color option") === false) {
+    return {
+      ...check,
+      expectedBoolean: false,
+      expectedCount: 0,
+      expectedNames: [],
+      missing: [],
+      extra: []
+    };
+  }
+
   const expectedNames = [...new Set(
     sourceColourNames(row)
   )];

@@ -106,6 +106,7 @@ type UpdatedListRow = {
   sku: string;
   wooId?: number;
   wooPermalink?: string;
+  sourceProductUrl?: string;
   wooMatch: boolean;
   wooStatus: string;
   ambiguousMatch: boolean;
